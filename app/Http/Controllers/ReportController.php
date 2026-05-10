@@ -328,6 +328,27 @@ class ReportController extends Controller
     }
 
     /**
+     * Renderiza a página IN 1888 via Inertia.
+     * Os dados de obrigatoriedade mensal são carregados via API pelo frontend.
+     */
+    public function in1888(Request $request)
+    {
+        $user = auth()->user();
+
+        // Anos disponíveis: do ano atual até 2019
+        $currentYear = (int) now()->year;
+        $availableYears = range($currentYear, 2019);
+
+        return Inertia::render('Reports/IN1888', [
+            'availableYears' => $availableYears,
+            'declarantInfo'  => [
+                'name' => $user->name ?? '',
+                'cpf'  => $user->cpf  ?? '',
+            ],
+        ]);
+    }
+
+    /**
      * Calculate trading performance.
      */
     private function calculateTradingPerformance($orders)

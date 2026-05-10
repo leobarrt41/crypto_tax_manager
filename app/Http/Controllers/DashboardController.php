@@ -10,6 +10,7 @@ use App\Models\CryptoAsset;
 use App\Models\Wallet;
 use App\Models\WalletBalance;
 use App\Models\TradingStrategy;
+use App\Services\In1888StatusService;
 use Carbon\Carbon;
 use Inertia\Inertia;
 
@@ -105,37 +106,38 @@ class DashboardController extends Controller
         ];
     }
 
-    /**
-     * Get IN 1888 Status
+      /**
+     * Get IN 1888 Status — delega ao In1888StatusService.
+     *
+     * Apenas movimentações em exchanges ESTRANGEIRAS e carteiras
+     * são consideradas (exchanges nacionais reportam diretamente à RF).
      */
-    private function getIN1888Status($user)
+    private function getIN1888Status($user): array
     {
-        $currentMonth = now()->month;
-        $currentYear = now()->year;
-        
-        $monthlyVolume = Transaction::where('user_id', $user->id)
-            ->whereMonth('date', $currentMonth)
-            ->whereYear('date', $currentYear)
-            ->sum('total_brl');
+        /** @var In1888StatusService $service */
+        $service = app(In1888StatusService::class);
+        $status  = $service->statusMesAtual($user->id);
 
-        if ($monthlyVolume <= 30000) {
-            return [
-                'status' => 'not_required',
-                'message' => 'Não obrigatória',
-                'description' => 'Volume mensal abaixo de R$ 30.000',
-                'volume' => $monthlyVolume,
-            ];
-        }
-
-        // Verificar se já foi gerado (simulado)
-        $hasFile = false; // Implementar verificação real
-
+        // Adapta o retorno para o formato esperado pelo Dashboard.vue
         return [
-            'status' => $hasFile ? 'compliant' : 'pending',
-            'message' => $hasFile ? 'Em dia' : 'Pendente',
-            'description' => $hasFile ? 'Arquivo gerado' : 'Aguardando geração',
-            'volume' => $monthlyVolume,
+            'status'      => $status['status'],
+            'message'     => $status['status_label'],
+            'description' => $this->buildIn1888Description($status),
+            'volume'      => $status['volume_brl'],
         ];
+    }
+
+    private function buildIn1888Description(array $status): string
+    {
+        $mes    = $status['month_label'] . '/' . $status['year'];
+        $volume = 'R$ ' . number_format($status['volume_brl'], 2, ',', '.');
+
+        return match ($status['status']) {
+            'no_data'      => "Sem movimentações em exchanges estrangeiras em {$mes}.",
+            'not_required' => "Volume de {$volume} em {$mes} — abaixo do limite de R$ 30.000.",
+            'required'     => "Volume de {$volume} em {$mes} — acima do limite de R$ 30.000.",
+            default        => "Referente a {$mes}.",
+        };
     }
 
     /**

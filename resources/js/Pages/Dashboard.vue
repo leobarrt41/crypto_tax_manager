@@ -43,14 +43,36 @@
             subtitle="Operações realizadas"
           />
           
-        <StatCard
-            title="Status IN 1888"
-            :value="stats.in1888_status?.message || 'Mês atual sem dados'"
-            format="text"
-            icon="document"
-            :color="getComplianceColor(stats.in1888_status?.status)"
-            :subtitle="`Referente ao mês atual. ${stats.in1888_status?.description || 'Sem movimentações importadas para o mês atual.'}`"
-          />
+        <!-- Card IN 1888 customizado (evita NaN e exibe link para status anual) -->
+        <div class="bg-white shadow rounded-lg p-4">
+          <div class="flex items-center">
+            <div class="flex-shrink-0">
+              <div class="w-8 h-8 rounded-md flex items-center justify-center"
+                   :class="in1888CardColor">
+                <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                        d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                </svg>
+              </div>
+            </div>
+            <div class="ml-5 w-0 flex-1">
+              <dl>
+                <dt class="text-sm font-medium text-gray-500 truncate">Status IN 1888</dt>
+                <dd class="text-2xl font-semibold text-gray-900">
+                  {{ in1888StatusLabel }}
+                </dd>
+                <dt class="text-xs text-gray-400 mt-1">
+                  {{ in1888Description }}
+                </dt>
+                <dt class="mt-2">
+                  <a href="/reports/in1888" class="text-xs text-blue-600 hover:underline">
+                    Ver status anual mês a mês →
+                  </a>
+                </dt>
+              </dl>
+            </div>
+          </div>
+        </div>
 
 
         </div>
@@ -265,12 +287,43 @@ const formatDate = (date) => {
 
 const getComplianceColor = (status) => {
   const colors = {
-    'compliant': 'green',
-    'pending': 'yellow',
-    'non_compliant': 'red'
+    'required':     'red',
+    'not_required': 'green',
+    'no_data':      'gray',
+    // legado
+    'compliant':    'green',
+    'pending':      'yellow',
+    'non_compliant':'red',
   }
   return colors[status] || 'gray'
 }
+
+// Card IN 1888 — computed helpers
+const in1888Status = computed(() => props.stats?.in1888_status ?? {})
+
+const in1888StatusLabel = computed(() => {
+  const s = in1888Status.value
+  if (!s || !s.status) return 'Sem dados'
+  return s.message || s.status_label || 'Sem dados'
+})
+
+const in1888Description = computed(() => {
+  const s = in1888Status.value
+  if (!s || !s.status) return 'Sem movimentações no mês atual.'
+  return s.description || ''
+})
+
+const in1888CardColor = computed(() => {
+  const map = {
+    required:     'bg-red-500',
+    not_required: 'bg-green-500',
+    no_data:      'bg-gray-400',
+    compliant:    'bg-green-500',
+    pending:      'bg-yellow-500',
+    non_compliant:'bg-red-500',
+  }
+  return map[in1888Status.value?.status] ?? 'bg-gray-400'
+})
 
 const getTransactionColor = (type) => {
   return type === 'buy' ? 'bg-green-500' : 'bg-red-500'

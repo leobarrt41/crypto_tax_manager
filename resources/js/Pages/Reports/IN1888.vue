@@ -357,6 +357,100 @@
             </div>
           </div>
         </div>
+
+        <!-- ================================================================
+             Seção: Obrigatoriedade mensal (ano a ano)
+             Apenas exchanges ESTRANGEIRAS entram no cálculo.
+             Exchanges nacionais (BR) não geram obrigação de IN 1888.
+        ================================================================ -->
+        <div class="mt-8">
+          <div class="bg-white rounded-lg shadow">
+            <div class="p-6 border-b border-gray-200 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 class="text-lg font-medium text-gray-900">Obrigatoriedade Mensal — IN 1888</h3>
+                <p class="text-sm text-gray-500 mt-1">
+                  Considera apenas movimentações em <strong>exchanges estrangeiras</strong> e carteiras próprias.
+                  Exchanges nacionais (ex.: Mercado Bitcoin) reportam diretamente à Receita Federal.
+                </p>
+              </div>
+              <div class="flex items-center gap-3">
+                <select
+                  v-model="annualYear"
+                  @change="loadAnnualStatus"
+                  class="text-sm border-gray-300 rounded-md shadow-sm focus:ring-green-500 focus:border-green-500"
+                >
+                  <option v-for="y in availableYearsForStatus" :key="y" :value="y">{{ y }}</option>
+                </select>
+                <button
+                  @click="exportAnnualCsv"
+                  :disabled="annualLoading || !annualData.months.length"
+                  class="inline-flex items-center px-3 py-1.5 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
+                >
+                  <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+                  </svg>
+                  Exportar CSV
+                </button>
+              </div>
+            </div>
+
+            <!-- Resumo anual -->
+            <div v-if="annualData.summary" class="grid grid-cols-3 divide-x divide-gray-200 border-b border-gray-200">
+              <div class="p-4 text-center">
+                <div class="text-2xl font-bold text-red-600">{{ annualData.summary.required }}</div>
+                <div class="text-xs text-gray-500 mt-1">Meses obrigatórios</div>
+              </div>
+              <div class="p-4 text-center">
+                <div class="text-2xl font-bold text-green-600">{{ annualData.summary.not_required }}</div>
+                <div class="text-xs text-gray-500 mt-1">Meses não obrigatórios</div>
+              </div>
+              <div class="p-4 text-center">
+                <div class="text-2xl font-bold text-gray-400">{{ annualData.summary.no_data }}</div>
+                <div class="text-xs text-gray-500 mt-1">Meses sem dados</div>
+              </div>
+            </div>
+
+            <!-- Tabela dos 12 meses -->
+            <div class="p-6">
+              <div v-if="annualLoading" class="flex justify-center py-8">
+                <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-green-600"></div>
+              </div>
+
+              <div v-else-if="!annualData.months.length" class="text-center py-8 text-gray-400">
+                Nenhum dado encontrado para {{ annualYear }}.
+              </div>
+
+              <table v-else class="min-w-full divide-y divide-gray-200">
+                <thead>
+                  <tr class="text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    <th class="pb-3 pr-4">Mês</th>
+                    <th class="pb-3 pr-4 text-right">Volume (R$)</th>
+                    <th class="pb-3 pr-4 text-right">Transações</th>
+                    <th class="pb-3">Status</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                  <tr v-for="row in annualData.months" :key="row.month" class="hover:bg-gray-50">
+                    <td class="py-3 pr-4 text-sm font-medium text-gray-900">{{ row.month_label }}</td>
+                    <td class="py-3 pr-4 text-sm text-gray-700 text-right">
+                      {{ row.transactions_count > 0 ? formatCurrency(row.volume_brl) : '—' }}
+                    </td>
+                    <td class="py-3 pr-4 text-sm text-gray-500 text-right">{{ row.transactions_count }}</td>
+                    <td class="py-3">
+                      <span
+                        class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium"
+                        :class="annualStatusBadge(row.status)"
+                      >
+                        {{ row.status_label }}
+                      </span>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
       </div>
     </div>
   </AppLayout>
@@ -372,6 +466,49 @@ const props = defineProps({
   availableYears: Array,
   declarantInfo: Object
 })
+
+// ── Status anual de obrigatoriedade ────────────────────────────────────────
+const currentYear = new Date().getFullYear()
+const availableYearsForStatus = computed(() => {
+  const years = []
+  for (let y = currentYear; y >= 2019; y--) years.push(y)
+  return years
+})
+
+const annualYear  = ref(currentYear)
+const annualLoading = ref(false)
+const annualData  = ref({ year: currentYear, months: [], summary: null })
+
+const loadAnnualStatus = async () => {
+  annualLoading.value = true
+  try {
+    const res  = await fetch(`/api/tax-reports/in1888-status/annual?year=${annualYear.value}`, {
+      headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }
+    })
+    const data = await res.json()
+    annualData.value = data
+  } catch (err) {
+    console.error('Erro ao carregar status anual IN 1888:', err)
+  } finally {
+    annualLoading.value = false
+  }
+}
+
+const exportAnnualCsv = () => {
+  window.location.href = `/api/tax-reports/in1888-status/export-csv?year=${annualYear.value}`
+}
+
+const annualStatusBadge = (status) => {
+  const map = {
+    required:     'bg-red-100 text-red-800',
+    not_required: 'bg-green-100 text-green-800',
+    no_data:      'bg-gray-100 text-gray-600',
+  }
+  return map[status] ?? 'bg-gray-100 text-gray-600'
+}
+
+// Carrega ao montar
+loadAnnualStatus()
 
 const loading = ref(false)
 const months = [

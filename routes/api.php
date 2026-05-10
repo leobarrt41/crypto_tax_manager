@@ -8,6 +8,7 @@ use App\Http\Controllers\TransactionController;
 use App\Http\Controllers\CryptoAssetController;
 use App\Http\Controllers\ExchangeKeyController;
 use App\Http\Controllers\TaxReportController;
+use App\Http\Controllers\In1888StatusController;
 
 /*
 |--------------------------------------------------------------------------
@@ -186,6 +187,14 @@ Route::middleware(['auth:sanctum'])->prefix('tax-reports')->group(function () {
     Route::get('/relatorio-ir/summary', [TaxReportController::class, 'monthlySummary']);
     Route::post('/relatorio-ir/recalculate', [TaxReportController::class, 'recalculateFifo']);
     Route::get('/relatorio-ir/export-csv', [TaxReportController::class, 'exportCsv']);
+
+    // ── Status IN 1888 (obrigatoriedade mensal) ──
+    Route::prefix('in1888-status')->group(function () {
+        Route::get('/current',    [In1888StatusController::class, 'current']);    // mês atual (Dashboard)
+        Route::get('/annual',     [In1888StatusController::class, 'annual']);     // 12 meses de um ano
+        Route::get('/monthly',    [In1888StatusController::class, 'monthly']);    // mês específico
+        Route::get('/export-csv', [In1888StatusController::class, 'exportCsv']); // CSV anual
+    });
 });
 
 /*
