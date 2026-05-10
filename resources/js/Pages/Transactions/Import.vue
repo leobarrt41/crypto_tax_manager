@@ -89,32 +89,7 @@
                 </p>
               </div>
 
-              <!-- Date Range -->
-              <div v-if="exchangeForm.api_key_id" class="mb-4">
-                <label class="block text-sm font-medium text-gray-700 mb-2">
-                  Período de Importação
-                </label>
-                <div class="grid grid-cols-2 gap-4">
-                  <div>
-                    <label for="start_date" class="block text-xs font-medium text-gray-500">Data inicial</label>
-                    <input
-                      id="start_date"
-                      v-model="exchangeForm.start_date"
-                      type="date"
-                      class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary focus:border-primary sm:text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label for="end_date" class="block text-xs font-medium text-gray-500">Data final</label>
-                    <input
-                      id="end_date"
-                      v-model="exchangeForm.end_date"
-                      type="date"
-                      class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary focus:border-primary sm:text-sm"
-                    />
-                  </div>
-                </div>
-              </div>
+            
 
               <!-- Import Button -->
               <button
@@ -196,10 +171,10 @@
                 <svg class="h-5 w-5 text-green-500 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
                 </svg>
-                Importar CSV
+                Importar CSV/XLSX
               </h3>
               <p class="mt-1 text-sm text-gray-500">
-                Faça upload de um arquivo CSV com suas transações
+                Faça upload de um arquivo CSV ou XLSX com suas transações
               </p>
             </div>
             <div class="px-6 py-4">
@@ -207,7 +182,7 @@
               <!-- File Upload -->
               <div class="mb-4">
                 <label class="block text-sm font-medium text-gray-700 mb-2">
-                  Arquivo CSV
+                  Arquivo CSV/XLSX
                 </label>
                 <div class="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-gray-300 border-dashed rounded-md">
                   <div class="space-y-1 text-center">
@@ -221,14 +196,14 @@
                           id="csv_file"
                           ref="csvFileInput"
                           type="file"
-                          accept=".csv"
+                          accept=".csv,.xlsx"
                           class="sr-only"
                           @change="handleFileUpload"
                         />
                       </label>
                       <p class="pl-1">ou arraste e solte</p>
                     </div>
-                    <p class="text-xs text-gray-500">CSV até 10MB</p>
+                    <p class="text-xs text-gray-500">CSV/XLSX até 10MB</p>
                   </div>
                 </div>
                 <div v-if="csvForm.file" class="mt-2 text-sm text-gray-600">
@@ -344,7 +319,7 @@
               <!-- Import Button -->
               <button
                 @click="importFromCSV"
-                :disabled="!csvForm.file || csvImporting"
+                :disabled="!canSubmitFileImport || csvImporting"
                 class="w-full inline-flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <span v-if="csvImporting" class="flex items-center">
@@ -358,7 +333,7 @@
                   <svg class="-ml-1 mr-2 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10"></path>
                   </svg>
-                  Importar CSV
+                  Importar Arquivo
                 </span>
               </button>
 
@@ -376,7 +351,7 @@
       <div v-if="csvPreview.length > 0" class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 mt-6">
         <div class="bg-white shadow rounded-lg">
           <div class="px-6 py-4 border-b border-gray-200">
-            <h3 class="text-lg font-medium text-gray-900">Prévia do Arquivo CSV</h3>
+            <h3 class="text-lg font-medium text-gray-900">Prévia do Arquivo</h3>
             <p class="mt-1 text-sm text-gray-500">
               Primeiras {{ csvPreview.length }} linhas do arquivo
             </p>
@@ -449,6 +424,8 @@ import { ref, computed, onMounted } from 'vue'
 import { router } from '@inertiajs/vue3'
 import AppLayout from '@/Layouts/AppLayout.vue'
 import { Link } from '@inertiajs/vue3'
+import { route } from 'ziggy-js';
+
 
 // Props
 const props = defineProps({
@@ -495,6 +472,9 @@ const csvImporting = ref(false)
 const csvPreview = ref([])
 const csvHeaders = ref([])
 const csvFileInput = ref(null)
+const canSubmitFileImport = computed(() => {
+  return Boolean(csvForm.value.file && csvForm.value.source_type && csvForm.value.source_id)
+})
 
 // Forms
 const exchangeForm = ref({
@@ -534,36 +514,87 @@ const loadExchangeKeys = () => {
   exchangeForm.value.api_key_id = ''
 }
 
-const importFromExchange = async () => {
-  exchangeImporting.value = true
-  
-  try {
-  await axios.post(`/transactions/import/${exchangeForm.value.exchange}`, {
-      api_key_id: exchangeForm.value.api_key_id,
-      start_date: exchangeForm.value.start_date,
-      end_date: exchangeForm.value.end_date,
-    })
 
-    // Limpa o formulário após o sucesso
-    exchangeForm.value = {
-      exchange: '',
-      api_key_id: '',
-      start_date: '',
-      end_date: '',
-    }
+
+
+const importFromExchange = () => {
+  // ===================================================================
+  // CAMADA 1: O EVENTO DE CLIQUE E VALIDAÇÃO INICIAL
+  // ===================================================================
+  console.log('[FRONTEND LOG] 1. Início: Função importFromExchange foi chamada.');
+  alert('Passo 1: O clique no botão funcionou. A função JavaScript foi iniciada.');
+
+  if (!exchangeForm.value.exchange) {
+    alert('Validação falhou: Nenhuma exchange selecionada.');
+    console.error('[FRONTEND LOG] 1.1. Erro: Tentativa de importar sem selecionar uma exchange.');
+    return;
+  }
+
+  if (!confirm(`Confirma o início da importação para a exchange: ${exchangeForm.value.exchange}?`)) {
+    console.log('[FRONTEND LOG] 1.2. Ação: Usuário cancelou a importação.');
+    return;
+  }
+
+  exchangeImporting.value = true;
+
+  // ===================================================================
+  // CAMADA 2: TENTATIVA DE RESOLVER A ROTA (O PONTO DE FALHA ANTERIOR)
+  // ===================================================================
+  try {
+    console.log("[FRONTEND LOG] 2. Tentando resolver a rota 'transactions.sync' com o Ziggy...");
+    
+    const targetUrl = route('transactions.sync', { exchange: exchangeForm.value.exchange });
+    
+    console.log(`[FRONTEND LOG] 2.1. ✅ SUCESSO! Rota resolvida. A URL final é: ${targetUrl}`);
+    alert(`Passo 2: Rota encontrada com sucesso! A URL é: ${targetUrl}. Agora, vamos para a Camada 3: Enviar a requisição.`);
+
+    // ===================================================================
+    // CAMADA 3: TENTATIVA DE ENVIAR A REQUISIÇÃO PARA O BACKEND
+    // ===================================================================
+    router.post(targetUrl, {}, {
+      preserveScroll: true,
+      
+      onStart: () => {
+        console.log('[FRONTEND LOG] 3. 🚀 Enviando requisição POST para o backend...');
+        alert("Passo 3: Requisição enviada! Verifique a aba 'Network' nas ferramentas de desenvolvedor para ver a chamada de rede e o console do seu terminal para os logs do Laravel.");
+      },
+      
+      onSuccess: (page) => {
+        console.log('[FRONTEND LOG] 4. 🎉 SUCESSO! O backend respondeu com sucesso (status 2xx).', page.props);
+        alert('Passo 4: O backend respondeu que a importação foi iniciada em segundo plano. Verifique os logs do Laravel para ver o progresso.');
+      },
+      
+      onError: (errors) => {
+        console.error('[FRONTEND LOG] 5. 🚨 ERRO! O backend respondeu com um erro (status 4xx ou 5xx).', errors);
+        const errorMessages = Object.values(errors).join('\n');
+        alert(`Passo 5: O backend respondeu com um erro: \n${errorMessages}`);
+      },
+      
+      onFinish: () => {
+        console.log('[FRONTEND LOG] 6. 🔚 Requisição finalizada (seja com sucesso ou erro).');
+        exchangeImporting.value = false;
+      },
+    });
 
   } catch (error) {
-    console.error('Import failed:', error.response?.data || error)
-  } finally {
-    exchangeImporting.value = false
+    // Este bloco 'catch' só é executado se a linha `route(...)` falhar.
+    console.error("[FRONTEND LOG] ❌ ERRO CRÍTICO NA CAMADA 2! A função route() falhou.", error);
+    alert("ERRO CRÍTICO: Não foi possível encontrar a rota 'transactions.sync'. Isso significa que o Ziggy não está configurado corretamente. Verifique o console para detalhes.");
+    exchangeImporting.value = false;
   }
-}
+};
 
 const handleFileUpload = (event) => {
   const file = event.target.files[0]
   if (file) {
     csvForm.value.file = file
-    parseCSVPreview(file)
+    const extension = file.name.split('.').pop()?.toLowerCase()
+    if (extension === 'csv') {
+      parseCSVPreview(file)
+    } else {
+      csvHeaders.value = []
+      csvPreview.value = []
+    }
   }
 }
 
@@ -586,7 +617,7 @@ const importFromCSV = async () => {
   const formData = new FormData()
   formData.append('file', csvForm.value.file)
   formData.append('format', csvForm.value.format)
-  formData.append('skip_duplicates', csvForm.value.skip_duplicates)
+  formData.append('skip_duplicates', csvForm.value.skip_duplicates ? '1' : '0')
   formData.append('source_type', csvForm.value.source_type)
   formData.append('source_id', csvForm.value.source_id)
 
@@ -614,8 +645,13 @@ const importFromCSV = async () => {
         }
       },
       onError: (errors) => {
-        // Handle errors
         console.error('Import failed:', errors)
+        const firstError = Object.values(errors || {})[0]
+        if (firstError) {
+          alert(Array.isArray(firstError) ? firstError.join('\n') : String(firstError))
+        } else {
+          alert('Falha na importação. Verifique os campos obrigatórios e tente novamente.')
+        }
       }
     })
   } finally {
@@ -667,15 +703,15 @@ const walletForm = ref({
 
 
 // Lifecycle
-onMounted(() => {
+//onMounted(() => {
   // Set default date range (last 30 days)
-  const endDate = new Date()
-  const startDate = new Date()
-  startDate.setDate(startDate.getDate() - 30)
+ // const endDate = new Date()
+ // const startDate = new Date()
+ // startDate.setDate(startDate.getDate() - 30)
   
-  exchangeForm.value.end_date = endDate.toISOString().split('T')[0]
-  exchangeForm.value.start_date = startDate.toISOString().split('T')[0]
-})
+  //exchangeForm.value.end_date = endDate.toISOString().split('T')[0]
+ // exchangeForm.value.start_date = startDate.toISOString().split('T')[0]
+//})
 </script>
 
 <style scoped>
@@ -703,4 +739,3 @@ onMounted(() => {
   border-color: var(--primary-color, #3b82f6);
 }
 </style>
-

@@ -37,6 +37,8 @@ class CryptoAsset extends Model
         'is_stablecoin',
         'is_defi',
         'is_nft',
+        'listed_at',
+        'delisted_at',
         'price_updated_at',
         'market_data_updated_at',
     ];
@@ -60,6 +62,8 @@ class CryptoAsset extends Model
         'is_stablecoin' => 'boolean',
         'is_defi' => 'boolean',
         'is_nft' => 'boolean',
+        'listed_at' => 'datetime',
+        'delisted_at' => 'datetime',
         'price_updated_at' => 'datetime',
         'market_data_updated_at' => 'datetime',
     ];

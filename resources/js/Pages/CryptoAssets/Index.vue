@@ -2,7 +2,7 @@
   <AppLayout>
     
       <h2 class="text-xl font-semibold text-gray-800 dark:text-white">
-        Criptoativos Cadastrados
+        Pares de Trading Cadastrados
       </h2>
     
     <!-- Conteúdo principal -->
@@ -13,7 +13,7 @@
         <input 
           v-model="searchQuery" 
           type="text" 
-          placeholder="Buscar criptoativos..." 
+          placeholder="Buscar pares (ex: BTCUSDT, BTC, USDT)..." 
           class="w-full px-4 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"
         />
       </div>
@@ -34,25 +34,27 @@
       <!-- Status da importação -->
       <p v-if="statusMessage" class="mt-4 text-sm text-gray-600">{{ statusMessage }}</p>
 
-      <!-- Tabela de criptoativos -->
+      <!-- Tabela de pares -->
       <table class="min-w-full bg-white border border-gray-300 mt-4">
         <thead>
           <tr>
-            <th class="border border-gray-300 px-4 py-2">Moeda</th>
-            <th class="border border-gray-300 px-4 py-2">Símbolo</th>
-            <th class="border border-gray-300 px-4 py-2">Endereço do Contrato</th>
+            <th class="border border-gray-300 px-4 py-2">Par</th>
+            <th class="border border-gray-300 px-4 py-2">Base</th>
+            <th class="border border-gray-300 px-4 py-2">Quote</th>
+            <th class="border border-gray-300 px-4 py-2">Status</th>
           </tr>
         </thead>
         <tbody v-if="paginatedCryptoAssets.length > 0">
-          <tr v-for="crypto in paginatedCryptoAssets" :key="crypto.id">
-            <td class="border border-gray-300 px-4 py-2">{{ crypto.name }}</td>
-            <td class="border border-gray-300 px-4 py-2">{{ crypto.symbol }}</td>
-            <td class="border border-gray-300 px-4 py-2">{{ crypto.contract_address || 'Não disponível' }}</td>
+          <tr v-for="pair in paginatedCryptoAssets" :key="pair.id">
+            <td class="border border-gray-300 px-4 py-2">{{ pair.symbol }}</td>
+            <td class="border border-gray-300 px-4 py-2">{{ pair.base_asset }}</td>
+            <td class="border border-gray-300 px-4 py-2">{{ pair.quote_asset }}</td>
+            <td class="border border-gray-300 px-4 py-2">{{ pair.status }}</td>
           </tr>
         </tbody>
         <tbody v-else>
           <tr>
-            <td colspan="3" class="text-center text-gray-500 py-4">Nenhum criptoativo encontrado.</td>
+            <td colspan="4" class="text-center text-gray-500 py-4">Nenhum par encontrado.</td>
           </tr>
         </tbody>
       </table>
@@ -93,8 +95,6 @@ const exchanges = ref([
   { name: 'binance_smart_chain', label: 'Binance Smart Chain' },
   { name: 'coinbase', label: 'Coinbase' },
   { name: 'kraken', label: 'Kraken' },
-  { name: 'kucoin', label: 'KuCoin' },
-  { name: 'bitfinex', label: 'Bitfinex' },
 ]);
 
 //const cryptoAssets = ref([]);
@@ -108,14 +108,14 @@ const itemsPerPage = 10;  // Número de itens por página
 // Função para buscar criptoativos do backend
 const fetchCryptoAssets = async () => {
   try {
-    statusMessage.value = 'Carregando criptoativos...';
+    statusMessage.value = 'Carregando pares...';
     const response = await axios.get('/crypto-assets/all'); // Ex: nova rota que retorna todos
     cryptoAssets.value = response.data;
     allAssetsLoaded.value = true;
     statusMessage.value = '';
   } catch (error) {
     console.error('Erro ao buscar criptoativos:', error);
-    statusMessage.value = 'Erro ao carregar criptoativos.';
+    statusMessage.value = 'Erro ao carregar pares.';
   }
 };
 
@@ -125,7 +125,7 @@ const importCrypto = async (exchangeName) => {
   console.log(`Iniciando importação de: ${exchangeName}`);
   loading.value = true;
   currentExchange.value = exchangeName;
-  statusMessage.value = `Importando moedas da ${exchangeName}...`;
+  statusMessage.value = `Importando pares da ${exchangeName}...`;
 
   try {
     const response = await axios.post(`/import-crypto/${exchangeName}`);
@@ -136,7 +136,7 @@ const importCrypto = async (exchangeName) => {
     await fetchCryptoAssets();
   } catch (error) {
     console.error(`Erro ao importar moedas de ${exchangeName}:`, error);
-    statusMessage.value = `Erro ao importar moedas de ${exchangeName}.`;
+    statusMessage.value = `Erro ao importar pares de ${exchangeName}.`;
     console.log('Detalhes do erro:', error.response ? error.response.data : error.message);
   } finally {
     loading.value = false;
@@ -147,11 +147,12 @@ const importCrypto = async (exchangeName) => {
 
 
 
-// Paginação: Filtra os criptoativos com base na pesquisa
+// Paginação: Filtra os pares com base na pesquisa
 const filteredCryptoAssets = computed(() => {
-  return cryptoAssets.value.filter(crypto =>
-    crypto.name.toLowerCase().includes(searchQuery.value.toLowerCase()) ||
-    crypto.symbol.toLowerCase().includes(searchQuery.value.toLowerCase())
+  return cryptoAssets.value.filter(pair =>
+    String(pair.symbol || '').toLowerCase().includes(searchQuery.value.toLowerCase()) ||
+    String(pair.base_asset || '').toLowerCase().includes(searchQuery.value.toLowerCase()) ||
+    String(pair.quote_asset || '').toLowerCase().includes(searchQuery.value.toLowerCase())
   );
 });
 

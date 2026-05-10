@@ -77,22 +77,42 @@ Route::middleware(['auth', 'verified'])->group(function () {
     });
 
     // ===== TRANSAÇÕES =====
-    Route::prefix('transactions')->name('transactions.')->group(function () {
-         Route::get('/import', [TransactionController::class, 'import'])->name('import');
+ Route::prefix('transactions')->name('transactions.')->group(function () {
         Route::get('/', [TransactionController::class, 'index'])->name('index');
+        Route::get('/import', [TransactionController::class, 'import'])->name('import');
         Route::get('/create', [TransactionController::class, 'create'])->name('create');
         Route::post('/', [TransactionController::class, 'store'])->name('store');
-        Route::get('/{transaction}', [TransactionController::class, 'show'])->name('show');
-        Route::get('/{transaction}/edit', [TransactionController::class, 'edit'])->name('edit');
-        Route::patch('/{transaction}', [TransactionController::class, 'update'])->name('update');
-        Route::delete('/{transaction}', [TransactionController::class, 'destroy'])->name('destroy');
         
-        // Páginas especiais
-       
+        Route::get('/{transaction}', [TransactionController::class, 'show'])->whereNumber('transaction')->name('show');
+        Route::get('/{transaction}/edit', [TransactionController::class, 'edit'])->whereNumber('transaction')->name('edit');
+        Route::patch('/{transaction}', [TransactionController::class, 'update'])->whereNumber('transaction')->name('update');
+        Route::delete('/{transaction}', [TransactionController::class, 'destroy'])->whereNumber('transaction')->name('destroy');
+        
+        // Ações em Massa
+        Route::delete('/delete-all', [TransactionController::class, 'destroyAll'])->name('destroyAll');
         Route::post('/import/csv', [TransactionController::class, 'importCsv'])->name('import.csv');
-        Route::post('/import/{exchange}', [TransactionController::class, 'importFromExchange'])->name('import.exchange');
         Route::post('/export/{format}', [TransactionController::class, 'export'])->name('export');
+    
+     // PORTFÓLIO, TRADING BOT, RELATÓRIOS, etc.
+    // (Todos os seus outros grupos de rotas permanecem aqui, sem alterações)
+    // ...
+    // ...
+
+    // ===================================================================
+    // ROTAS COM RATE LIMITING (para ações "caras" de API)
+    // ===================================================================
+    Route::middleware('throttle:10,1')->group(function () {
+        
+        // ✅ ROTA ÚNICA E CORRETA PARA SINCRONIZAR TRANSAÇÕES DE UMA EXCHANGE
+        Route::post('/sync-transactions/{exchange}', [TransactionController::class, 'syncFromExchange'])->name('sync');
+        
+        Route::post('/import-crypto/{exchange}', [CryptoAssetController::class, 'importCryptoAssets'])->name('crypto.assets.import');
     });
+    
+    
+    
+    });
+
 
 
 
@@ -267,6 +287,9 @@ if (app()->environment('local', 'staging')) {
         });
     });
 }
+
+Route::get('/run-binance-diagnostic', [\App\Http\Controllers\TransactionController::class, 'runBinanceDiagnostic']);
+
 
 // ===== FALLBACK ROUTE =====
 Route::fallback(function () {

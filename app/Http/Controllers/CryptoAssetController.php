@@ -7,6 +7,8 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Validator;
 use App\Models\CryptoAsset;
+use App\Models\TradingPair;
+use CryptoAssetPrice;
 use Illuminate\Support\Facades\Log;
 use Inertia\Inertia;
 use Carbon\Carbon;
@@ -102,6 +104,8 @@ class CryptoAssetController extends Controller
             'is_stablecoin' => 'boolean',
             'is_defi' => 'boolean',
             'is_nft' => 'boolean',
+            'listed_at' => 'nullable|date',
+            'delisted_at' => 'nullable|date|after_or_equal:listed_at',
         ]);
 
         if ($validator->fails()) {
@@ -139,6 +143,8 @@ class CryptoAssetController extends Controller
             'is_stablecoin' => 'boolean',
             'is_defi' => 'boolean',
             'is_nft' => 'boolean',
+            'listed_at' => 'nullable|date',
+            'delisted_at' => 'nullable|date|after_or_equal:listed_at',
         ]);
 
         if ($validator->fails()) {
@@ -189,8 +195,6 @@ class CryptoAssetController extends Controller
     Log::info('Iniciando importação de criptoativos', ['request' => $request->all()]);
 
 
-    $exchange = $request->route('exchange');
-
  $exchange = $request->route('exchange');
 
 $validator = Validator::make(
@@ -220,18 +224,28 @@ $validator = Validator::make(
             return response()->json(['success' => false, 'message' => 'Erro ao buscar dados da API.']);
         }
 
+        if ($exchange === 'binance') {
+            [$importedPairs, $updatedPairs] = $this->importBinanceTradingPairs($apiData);
+
+            Log::info('Importação de pares Binance concluída com sucesso', [
+                'exchange' => $exchange,
+                'imported_pairs' => $importedPairs,
+                'updated_pairs' => $updatedPairs,
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => "Importação concluída: {$importedPairs} pares novos, {$updatedPairs} pares atualizados."
+            ]);
+        }
+
         $imported = 0;
         $updated = 0;
-
         $parsedAssets = $this->parseCryptoAssets($exchange, $apiData);
         Log::info("Criptoativos extraídos da resposta da API", ['total' => count($parsedAssets)]);
 
         foreach ($parsedAssets as $crypto) {
-            $asset = CryptoAsset::updateOrCreate(
-                ['symbol' => $crypto['symbol']],
-                $crypto
-            );
-
+            $asset = CryptoAsset::updateOrCreate(['symbol' => $crypto['symbol']], $crypto);
             if ($asset->wasRecentlyCreated) {
                 $imported++;
             } else {
@@ -321,6 +335,10 @@ $validator = Validator::make(
 
     private function fetchExchangeData(string $exchange, int $limit = 100): ?array
     {
+        if ($exchange === 'binance') {
+            return $this->fetchBinanceTradingCatalogSymbols();
+        }
+
         $apiUrl = match($exchange) {
             'binance' => 'https://api.binance.com/api/v3/ticker/price',
             'binance_smart_chain' => 'https://api.bscscan.com/api?module=token&action=listtokens&apikey=' . env('BSCSCAN_API_KEY'),
@@ -350,15 +368,34 @@ $validator = Validator::make(
 
     switch ($exchange) {
         case 'binance':
+            if (isset($data[0]['asset'])) {
+                foreach ($data as $balance) {
+                    $symbol = strtoupper(trim((string)($balance['asset'] ?? '')));
+                    if (!$this->isValidBinanceAssetSymbol($symbol)) {
+                        continue;
+                    }
+
+                    $result[$symbol] = [
+                        'symbol' => $symbol,
+                        'name' => $symbol,
+                        'blockchain' => 'Binance',
+                    ];
+                }
+                break;
+            }
+
             foreach ($data as $crypto) {
+                if (empty($crypto['symbol'])) {
+                    continue;
+                }
+
                 $assets = $this->splitSymbol($crypto['symbol']);
 
                 if (count($assets) === 2) {
                     [$base, $quote] = $assets;
 
-                    // 🔒 Ignorar tokens suspeitos (como 1000XXX, XXXUSDC, etc.)
                     foreach ([$base, $quote] as $symbol) {
-                        if (strlen($symbol) > 10 || preg_match('/(USDC|FD)$/i', $symbol)) {
+                        if (!$this->isValidBinanceAssetSymbol($symbol)) {
                             continue;
                         }
 
@@ -373,7 +410,7 @@ $validator = Validator::make(
                     }
                 } else {
                     $symbol = $assets[0];
-                    if (strlen($symbol) <= 10 && !preg_match('/(USDC|FD)$/i', $symbol)) {
+                    if ($this->isValidBinanceAssetSymbol($symbol)) {
                         if (!isset($result[$symbol])) {
                             $result[$symbol] = [
                                 'symbol' => $symbol,
@@ -555,7 +592,90 @@ private function splitSymbol(string $symbol): array
 
 public function all()
 {
-    return CryptoAsset::orderBy('name')->get();
+    return TradingPair::query()
+        ->where('status', 'TRADING')
+        ->orderBy('symbol')
+        ->get(['id', 'symbol', 'base_asset', 'quote_asset', 'status']);
+}
+
+private function isValidBinanceAssetSymbol(?string $symbol): bool
+{
+    if (!$symbol) {
+        return false;
+    }
+
+    $symbol = strtoupper(trim($symbol));
+
+    // Aceita símbolos Binance padrão (inclui alfanuméricos como 1INCH, 1000PEPE, FDUSD etc.)
+    return (bool) preg_match('/^[A-Z0-9]{2,20}$/', $symbol);
+}
+
+private function fetchBinanceTradingCatalogSymbols(): array
+{
+    try {
+        $response = Http::timeout(30)->get('https://api.binance.com/api/v3/exchangeInfo');
+
+        if (!$response->successful()) {
+            Log::warning('Importação Binance catálogo: falha ao consultar /exchangeInfo.', [
+                'status' => $response->status(),
+            ]);
+            return [];
+        }
+
+        $symbols = collect($response->json('symbols', []))
+            ->filter(fn($item) => ($item['status'] ?? null) === 'TRADING')
+            ->values()
+            ->all();
+
+        Log::info('Importação Binance catálogo: pares vigentes recuperados.', [
+            'total' => count($symbols),
+        ]);
+
+        return $symbols;
+    } catch (\Exception $e) {
+        Log::error('Importação Binance catálogo: erro ao buscar exchangeInfo.', [
+            'error' => $e->getMessage(),
+        ]);
+        return [];
+    }
+}
+
+private function importBinanceTradingPairs(array $symbols): array
+{
+    $imported = 0;
+    $updated = 0;
+
+    foreach ($symbols as $symbolInfo) {
+        $symbol = strtoupper(trim((string)($symbolInfo['symbol'] ?? '')));
+        $baseAsset = strtoupper(trim((string)($symbolInfo['baseAsset'] ?? '')));
+        $quoteAsset = strtoupper(trim((string)($symbolInfo['quoteAsset'] ?? '')));
+
+        if (!$symbol || !$baseAsset || !$quoteAsset) {
+            continue;
+        }
+
+        $pair = TradingPair::updateOrCreate(
+            ['symbol' => $symbol],
+            [
+                'base_asset' => $baseAsset,
+                'quote_asset' => $quoteAsset,
+                'status' => $symbolInfo['status'] ?? 'TRADING',
+                'is_spot_trading_allowed' => (bool)($symbolInfo['isSpotTradingAllowed'] ?? false),
+                'is_margin_trading_allowed' => (bool)($symbolInfo['isMarginTradingAllowed'] ?? false),
+                'filters' => $symbolInfo['filters'] ?? null,
+                'listed_at' => TradingPair::where('symbol', $symbol)->value('listed_at') ?? now(),
+                'delisted_at' => null,
+            ]
+        );
+
+        if ($pair->wasRecentlyCreated) {
+            $imported++;
+        } else {
+            $updated++;
+        }
+    }
+
+    return [$imported, $updated];
 }
 
 

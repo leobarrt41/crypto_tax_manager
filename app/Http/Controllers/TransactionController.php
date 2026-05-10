@@ -3,131 +3,138 @@
 namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Str;
 use Inertia\Inertia;
+use App\Jobs\ProcessBinanceImport; 
 use App\Models\Transaction;
 use App\Models\UserApiKey;
 use App\Models\CryptoAsset;
-use App\Models\Exchange;
-use Binance\API as BinanceAPI;
-use Carbon\Carbon;
 use App\Services\FifoCalculatorService;
+use App\Services\BinanceImportService; // ✅ Importa o novo serviço
+use App\Services\CryptoPriceService;
 use Exception;
+use Carbon\Carbon; // Necessário para a reconstrução de saldos
+use OpenSpout\Reader\XLSX\Reader as XlsxReader;
 
 class TransactionController extends Controller
 {
     /**
-     * Lista as transações do usuário autenticado
+     * Lista as transações do usuário autenticado com filtros e paginação.
      */
-    public function index(Request $request)
-    {
-        $filters = $request->only([
-            'search', 'type', 'crypto_asset_id', 'date_range', 'start_date', 'end_date'
-        ]);
+    // Em app/Http/Controllers/TransactionController.php
 
-       $query = Transaction::with(['source', 'fromCryptoAsset', 'toCryptoAsset'])
-            ->where('user_id', auth()->id())
-            ->orderByDesc('date');
+public function index(Request $request)
+{
+    // 1. Valida e obtém os filtros da requisição.
+    $filters = $request->validate([
+        'search' => 'nullable|string|max:100',
+        'type' => 'nullable|string|in:trade,convert,deposit,withdrawal,fiat_buy,fiat_sell,mining,staking',
+        'crypto_asset_id' => 'nullable|integer|exists:crypto_assets,id',
+        'date_range' => 'nullable|string',
+        'start_date' => 'nullable|date',
+        'end_date' => 'nullable|date',
+    ]);
 
-        // Aplicar filtros se existirem
-        if ($filters['search'] ?? false) {
-            $search = $filters['search'];
-            $query->where(function ($q) use ($search) {
-                $q->where('from_asset', 'ilike', "%{$search}%")
-                  ->orWhere('to_asset', 'ilike', "%{$search}%")
-                  ->orWhere('txid', 'ilike', "%{$search}%")
-                  ->orWhere('reference', 'ilike', "%{$search}%");
-            });
-        }
-
-        if ($filters['origin'] ?? false) {
-                    switch ($filters['origin']) {
-                        case 'wallet':
-                            $query->where('source_type', Wallet::class);
-                            break;
-                        case 'exchange':
-                            $query->where('source_type', UserApiKey::class);
-                            break;
-                    }
-                }
-
-        if ($filters['type'] ?? false) {
-            $query->where('type', $filters['type']);
-        }
-
-        if (!empty($filters['date_range']) && $filters['date_range'] === 'custom') {
-            if (!empty($filters['start_date']) && !empty($filters['end_date'])) {
-                $query->whereBetween('date', [$filters['start_date'], $filters['end_date']]);
-            }
-        }
-
-        // Adicionar outros filtros de data
-        if (!empty($filters['date_range'])) {
-            switch ($filters['date_range']) {
-                case 'today':
-                    $query->whereDate('date', today());
-                    break;
-                case 'week':
-                    $query->whereBetween('date', [now()->startOfWeek(), now()->endOfWeek()]);
-                    break;
-                case 'month':
-                    $query->whereMonth('date', now()->month)
-                          ->whereYear('date', now()->year);
-                    break;
-                case 'year':
-                    $query->whereYear('date', now()->year);
-                    break;
-            }
-        }
-
-        $transactions = $query->paginate(10)->withQueryString();
-
-          $transactions->getCollection()->transform(function ($tr) {
-        return [
-            'id'                => $tr->id,
-            'type'              => $tr->type,
-            'operation'         => $tr->operation,
-            'from_asset'        => $tr->from_asset,
-            'to_asset'          => $tr->to_asset,
-            'from_crypto_asset' => $tr->fromCryptoAsset ? [
-                'symbol' => $tr->fromCryptoAsset->symbol,
-                'name'   => $tr->fromCryptoAsset->name,
-            ] : null,
-            'to_crypto_asset'   => $tr->toCryptoAsset ? [
-                'symbol' => $tr->toCryptoAsset->symbol,
-                'name'   => $tr->toCryptoAsset->name,
-            ] : null,
-            'from_amount'       => $tr->from_amount,
-            'to_amount'         => $tr->to_amount,
-            'unit_price'        => $tr->price,
-            'total_amount'      => $tr->total_usdt, // ou total_brl, conforme currency selecionada
-            'fees'              => 0,               // ajuste conforme seu modelo
-            'executed_at'       => $tr->date?->toIso8601String(), // string ISO, válida para o Vue
-        ];
-    });
-
-        // Dados para os cards (usando query clone para não afetar paginação)
-        $statsQuery = Transaction::where('user_id', auth()->id());
-        
-        $stats = [
-            'total_transactions' => $statsQuery->count(),
-            'total_volume' => $statsQuery->sum('total_usdt') ?? 0,
-            'this_month' => $statsQuery->whereMonth('date', now()->month)->count(),
-            'profit_loss' => 0, // Será calculado após implementar FIFO
-        ];
-
-        return Inertia::render('Transactions/Index', [
-            'transactions' => $transactions,
-            'cryptoAssets' => CryptoAsset::all(),
-            'stats' => $stats,
-            'filters' => $filters,
-        ]);
+    if (($filters['type'] ?? null) === 'spot') {
+        $filters['type'] = 'trade';
     }
 
+    // 2. Constrói a consulta base para as transações do usuário.
+    $query = Transaction::query()
+        ->where('user_id', auth()->id())
+        ->with(['fromCryptoAsset:id,symbol,name', 'toCryptoAsset:id,symbol,name']); // Carrega apenas colunas necessárias
+
+    // 3. Aplica os filtros de forma condicional e limpa.
+    $query->when($filters['search'] ?? null, function ($q, $search) {
+        $q->where(function ($subQ) use ($search) {
+            $subQ->where('from_asset', 'ilike', "%{$search}%")
+                 ->orWhere('to_asset', 'ilike', "%{$search}%")
+                 ->orWhere('txid', 'ilike', "%{$search}%")
+                 ->orWhere('reference', 'ilike', "%{$search}%");
+        });
+    });
+
+    $query->when($filters['type'] ?? null, function ($q, $type) {
+        $q->where('type', $type);
+    });
+
+    if (($filters['date_range'] ?? null) === 'custom' && !empty($filters['start_date']) && !empty($filters['end_date'])) {
+        $query->whereBetween('date', [$filters['start_date'], $filters['end_date']]);
+    } elseif (!empty($filters['date_range'])) {
+        match ($filters['date_range']) {
+            'today' => $query->whereDate('date', today()),
+            'week'  => $query->whereBetween('date', [now()->startOfWeek(), now()->endOfWeek()]),
+            'month' => $query->whereYear('date', now()->year)->whereMonth('date', now()->month),
+            'year'  => $query->whereYear('date', now()->year),
+            default => null,
+        };
+    }
+
+    // 4. ✅ CORREÇÃO DO BUG: Executa a paginação na consulta que foi construída com os filtros.
+    $transactions = $query->orderByDesc('date')->paginate(15)->withQueryString();
+
+    // Enriquecer dados com informações de taxa convertidas
+    $priceService = app(CryptoPriceService::class);
+    $transactions->getCollection()->transform(function (Transaction $transaction) use ($priceService) {
+        $transaction->fee_brl = null;
+        $transaction->fee_usdt = null;
+
+        if (!empty($transaction->commission) && !empty($transaction->commission_asset) && $transaction->date) {
+            try {
+                $prices = $priceService->getOrCreatePrice(
+                    $transaction->commission_asset,
+                    $transaction->date instanceof Carbon ? $transaction->date : Carbon::parse($transaction->date)
+                );
+
+                $commissionAmount = (float)$transaction->commission;
+                if ($prices->price_brl > 0) {
+                    $transaction->fee_brl = round($commissionAmount * (float)$prices->price_brl, 8);
+                }
+                if ($prices->price_usd > 0) {
+                    $transaction->fee_usdt = round($commissionAmount * (float)$prices->price_usd, 8);
+                }
+            } catch (Exception $e) {
+                Log::warning('[Transactions] Falha ao calcular taxa convertida', [
+                    'transaction_id' => $transaction->id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        return $transaction;
+    });
+
+    // 5. Otimização: Calcula as estatísticas a partir da mesma query dos filtros, ANTES da paginação.
+    $statsQuery = $query->clone()->getQuery(); // Clona a query base sem paginação/ordenação
+    $stats = [
+        'total_transactions' => (clone $statsQuery)->count(),
+        'total_volume' => (clone $statsQuery)->sum('total_usdt') ?? 0,
+        'total_volume_brl' => (clone $statsQuery)->sum('total_brl') ?? 0,
+        'this_month' => (clone $statsQuery)->whereYear('date', now()->year)->whereMonth('date', now()->month)->count(),
+        'profit_loss' => 0, // Placeholder
+    ];
+
+    // 6. Retorna os dados para a view do Inertia.
+    return Inertia::render('Transactions/Index', [
+        'transactions' => $transactions,
+        'stats' => $stats,
+        'filters' => $filters,
+        // Otimização: Carrega apenas os ativos que o usuário realmente possui para o filtro.
+        'cryptoAssets' => fn () => CryptoAsset::whereHas('transactions', function ($q) {
+            $q->where('user_id', auth()->id());
+        })->orderBy('symbol')->get(['id', 'symbol']),
+    ]);
+}
+
+
+    // ===================================================================
+    // MÉTODOS DE CRUD (NENHUMA MUDANÇA NECESSÁRIA)
+    // ===================================================================
     /**
-     * Mostra o formulário para criar uma nova transação
+     * Mostra o formulário para criar uma nova transação.
      */
     public function create()
     {
@@ -137,7 +144,7 @@ class TransactionController extends Controller
     }
 
     /**
-     * Armazena uma nova transação manualmente
+     * Armazena uma nova transação criada manualmente no banco de dados.
      */
     public function store(Request $request)
     {
@@ -160,17 +167,17 @@ class TransactionController extends Controller
         $data['user_id'] = auth()->id();
 
         try {
-            Transaction::create($data);
+            $transaction = Transaction::create($data);
 
+            // Se for uma operação de saída, chama o serviço de cálculo FIFO.
             if ($data['operation'] === 'saida') {
-                    app(FifoCalculatorService::class)->calculateFor($transaction);
-                }
+                app(FifoCalculatorService::class)->calculateFor($transaction);
+            }
 
-            
             return redirect()->route('transactions.index')
                 ->with('success', 'Transação cadastrada com sucesso!');
         } catch (Exception $e) {
-            Log::error('Erro ao criar transação: ' . $e->getMessage());
+            Log::error('Erro ao criar transação manual: ' . $e->getMessage());
             
             return back()->withErrors(['error' => 'Erro ao cadastrar transação.'])
                 ->withInput();
@@ -178,10 +185,11 @@ class TransactionController extends Controller
     }
 
     /**
-     * Mostra uma transação específica
+     * Mostra os detalhes de uma transação específica.
      */
     public function show($id)
     {
+        // Validação básica para garantir que o ID é numérico.
         if (!is_numeric($id)) {
             abort(404, 'Transação inválida');
         }
@@ -195,7 +203,7 @@ class TransactionController extends Controller
     }
 
     /**
-     * Mostra o formulário para editar uma transação
+     * Mostra o formulário para editar uma transação existente.
      */
     public function edit($id)
     {
@@ -209,7 +217,7 @@ class TransactionController extends Controller
     }
 
     /**
-     * Atualiza uma transação específica
+     * Atualiza uma transação específica no banco de dados.
      */
     public function update(Request $request, $id)
     {
@@ -235,9 +243,10 @@ class TransactionController extends Controller
         try {
             $transaction->update($data);
 
+            // Se a operação foi alterada para saída, recalcula o FIFO.
             if ($data['operation'] === 'saida') {
-                    app(FifoCalculatorService::class)->calculateFor($transaction);
-                }
+                app(FifoCalculatorService::class)->calculateFor($transaction);
+            }
             
             return redirect()->route('transactions.index')
                 ->with('success', 'Transação atualizada com sucesso!');
@@ -250,474 +259,170 @@ class TransactionController extends Controller
     }
 
     /**
-     * Remove uma transação específica
+     * Remove uma transação específica do banco de dados.
+     * CORRIGIDO: Redireciona de volta para a página anterior, mantendo a paginação e os filtros.
      */
     public function destroy($id)
     {
-        $transaction = Transaction::where('user_id', auth()->id())
-            ->findOrFail($id);
+        $transaction = Transaction::where('user_id', auth()->id())->findOrFail($id);
 
         try {
             $transaction->delete();
             
-            return redirect()->route('transactions.index')
-                ->with('success', 'Transação removida com sucesso!');
+            // Redireciona para a página anterior de onde a requisição veio.
+            return redirect()->back()->with('success', 'Transação removida com sucesso!');
+
         } catch (Exception $e) {
             Log::error('Erro ao remover transação: ' . $e->getMessage());
             
-            return back()->withErrors(['error' => 'Erro ao remover transação.']);
+            return redirect()->back()->withErrors(['error' => 'Erro ao remover transação.']);
         }
     }
 
-    /**
-     * Importa movimentações de uma exchange específica
-     */
-    public function importFromExchange($exchange)
-    {
-        $apiKey = UserApiKey::where('user_id', auth()->id())
-            ->whereHas('exchange', fn($q) => $q->where('name', strtolower($exchange)))
-            ->first();
 
-        if (!$apiKey) {
-            return response()->json([
-                'error' => "Chave da exchange '{$exchange}' não cadastrada."
-            ], 400);
-        }
 
-        try {
-            return match (strtolower($exchange)) {
-                'binance' => $this->importFromBinance($apiKey),
-                'coinbase' => $this->importFromCoinbase($apiKey),
-                'kraken' => $this->importFromKraken($apiKey),
-                'kucoin' => $this->importFromKucoin($apiKey),
-                'bitfinex' => $this->importFromBitfinex($apiKey),
-                default => response()->json([
-                    'error' => "Exchange não suportada: {$exchange}"
-                ], 400),
-            };
-        } catch (Exception $e) {
-            Log::error("Erro ao importar de {$exchange}: " . $e->getMessage());
-            
-            return response()->json([
-                'error' => 'Erro interno durante a importação.'
-            ], 500);
-        }
-    }
+    // Em app/Http/Controllers/TransactionController.php
 
-    /**
-     * Importa transações da Binance
-     */
- protected function importFromBinance($apiKey)
+/**
+ * Remove TODAS as transações do usuário autenticado.
+ * Ação destrutiva, a ser usada com cuidado.
+ */
+// Em app/Http/Controllers/TransactionController.php
+
+/**
+ * Remove TODAS as transações do usuário autenticado.
+ * Ação destrutiva, a ser usada com cuidado.
+ */
+public function destroyAll()
 {
+    // ✅ LOG 1: Confirma que a rota foi acessada e o método foi chamado.
+    Log::info('[Exclusão em Massa] Método destroyAll foi acessado pelo usuário: ' . auth()->id());
+
     try {
-        Log::info('[Binance Import] Iniciando importação para o usuário: ' . auth()->id());
+        $userId = auth()->id();
 
-        $client = new BinanceAPI($apiKey->api_key, $apiKey->secret_key);
-        $client->keepAlive = false;
-        $client->subscriptions = [];
-        $client->caOverride = false;
-        $client->proxyConf = null;
-        $client->useServerTime();
-        
-        usleep(100000); // 100ms
+        // ✅ LOG 2: Conta quantas transações existem ANTES de deletar.
+        $initialCount = Transaction::where('user_id', $userId)->count();
+        Log::info("[Exclusão em Massa] Encontradas {$initialCount} transações para o usuário {$userId} antes da exclusão.");
 
-        Log::info('[Binance] API Key: ' . substr($apiKey->api_key, 0, 8) . '...');
-        Log::info('[Binance] Secret existe: ' . (!empty($apiKey->secret_key) ? 'Sim' : 'Não'));
-        Log::info('[Binance Import] Instância Binance criada e sincronizada com server time.');
-
-        $accountInfo = $client->account();
-        if (!$accountInfo || isset($accountInfo['code'])) {
-            Log::warning('[Binance Import] Falha na autenticação da conta Binance.', ['response' => $accountInfo]);
-            return response()->json(['error' => 'Falha na autenticação com a Binance.'], 401);
+        if ($initialCount === 0) {
+            Log::warning('[Exclusão em Massa] Nenhuma transação encontrada para deletar. Ação interrompida.');
+            return redirect()->route('transactions.index')->with('warning', 'Nenhuma transação para remover.');
         }
 
-        Log::info('[Binance Import] Autenticação bem-sucedida.');
+        // Deleta todas as transações associadas ao usuário logado.
+        $deletedCount = Transaction::where('user_id', $userId)->delete();
 
-        DB::beginTransaction();
-        $imported = 0;
+        // ✅ LOG 3: Confirma o resultado da operação de DELETE.
+        Log::info("[Exclusão em Massa] Resultado da operação de exclusão: {$deletedCount} linhas afetadas.");
 
-        // --- IMPORT SPOT ---
-        $spotTrades = $this->getSpotTrades($client);
-        Log::info('[Binance Spot] Total de trades spot encontrados: ' . count($spotTrades));
+        // Limpa o cache de snapshots para forçar uma reconstrução completa na próxima importação.
+        Cache::forget('binance_user_all_traded_symbols_' . $userId);
+        \App\Models\MonthlyAssetSnapshot::where('user_id', $userId)->delete();
+        Log::info('[Exclusão em Massa] Cache de símbolos e snapshots foram limpos.');
 
-        foreach ($spotTrades as $tradeData) {
-            $created = Transaction::updateOrCreate(
-                [
-                    'user_id' => auth()->id(),
-                    'source_type' => UserApiKey::class,
-                    'source_id' => $apiKey->id,
-                    'reference' => $tradeData['reference'],
-                ],
-                $tradeData
-            );
-
-            if ($created->wasRecentlyCreated) {
-                $imported++;
-                Log::info('[Binance Spot] Nova transação spot criada.', ['reference' => $created->reference]);
-            } else {
-                Log::info('[Binance Spot] Transação spot já existia.', ['reference' => $created->reference]);
-            }
-        }
-
-        // --- IMPORT CONVERSIONS ---
-        $conversions = $this->getConvertHistory($client);
-        Log::info('[Binance Import] Histórico de conversões recebido.', ['count' => count($conversions)]);
-
-        foreach ($conversions as $trade) {
-            Log::debug('[Binance Import] Processando trade:', $trade);
-
-            $created = Transaction::updateOrCreate(
-                [
-                    'user_id' => auth()->id(),
-                    'source_type' => UserApiKey::class,
-                    'source_id' => $apiKey->id,
-                    'reference' => $trade['orderId'] ?? $trade['quoteId'] ?? null,
-                ],
-                [
-                    'from_asset' => $trade['fromAsset'],
-                    'to_asset' => $trade['toAsset'],
-                    'from_amount' => $trade['fromAmount'],
-                    'to_amount' => $trade['toAmount'],
-                    'type' => 'convert',
-                    'operation' => 'troca',
-                    'price' => $trade['fromAmount'] > 0 
-                        ? $trade['toAmount'] / $trade['fromAmount'] 
-                        : null,
-                    'date' => Carbon::createFromTimestampMs($trade['createTime']),
-                    'total_usdt' => $this->calculateUsdtValue($trade),
-                    'total_brl' => null,
-                ]
-            );
-
-            if ($created->wasRecentlyCreated) {
-                $imported++;
-                Log::info('[Binance Import] Nova transação convert criada.', ['reference' => $created->reference]);
-            } else {
-                Log::info('[Binance Import] Transação convert já existia.', ['reference' => $created->reference]);
-            }
-        }
-
-        DB::commit();
-
-        Log::info("[Binance Import] Importação finalizada. Total importado: {$imported}");
-
-        return response()->json([
-            'success' => true,
-            'message' => "Importadas {$imported} novas transações da Binance!",
-            'imported' => $imported,
-            'total_found' => count($spotTrades) + count($conversions),
-        ]);
+        // Redireciona de volta com uma mensagem de sucesso.
+        return redirect()->route('transactions.index')->with('success', "{$deletedCount} transações foram removidas com sucesso!");
 
     } catch (Exception $e) {
-        DB::rollBack();
-        Log::error('[Binance Import] Erro na importação da Binance: ' . $e->getMessage());
-
-        return response()->json([
-            'error' => 'Erro ao importar transações da Binance: ' . $e->getMessage()
-        ], 500);
+        // ✅ LOG 4: Captura qualquer erro inesperado durante o processo.
+        Log::error('[Exclusão em Massa] Ocorreu uma exceção: ' . $e->getMessage(), [
+            'trace' => $e->getTraceAsString()
+        ]);
+        
+        return redirect()->back()->withErrors(['error' => 'Ocorreu um erro ao tentar remover todas as transações.']);
     }
 }
 
 
 
-
-
-    /**
-     * Importa transações da Coinbase
-     */
-    protected function importFromCoinbase($apiKey)
-    {
-        // TODO: Implementar integração com Coinbase Pro API
-        return response()->json([
-            'success' => true,
-            'message' => 'Importação da Coinbase ainda não implementada.',
-            'imported' => 0,
-        ]);
-    }
+    // ===================================================================
+    // PONTOS DE ENTRADA PARA IMPORTAÇÃO
+    // ===================================================================
 
     /**
-     * Importa transações da Kraken
-     */
-    protected function importFromKraken($apiKey)
-    {
-        // TODO: Implementar integração com Kraken API
-        return response()->json([
-            'success' => true,
-            'message' => 'Importação da Kraken ainda não implementada.',
-            'imported' => 0,
-        ]);
-    }
-
-    /**
-     * Importa transações da KuCoin
-     */
-    protected function importFromKucoin($apiKey)
-    {
-        // TODO: Implementar integração com KuCoin API
-        return response()->json([
-            'success' => true,
-            'message' => 'Importação da KuCoin ainda não implementada.',
-            'imported' => 0,
-        ]);
-    }
-
-    /**
-     * Importa transações da Bitfinex
-     */
-    protected function importFromBitfinex($apiKey)
-    {
-        // TODO: Implementar integração com Bitfinex API
-        return response()->json([
-            'success' => true,
-            'message' => 'Importação da Bitfinex ainda não implementada.',
-            'imported' => 0,
-        ]);
-    }
-
-    /**
-     * Busca histórico completo de conversões da Binance
-     */
-    private function getConvertHistory($client)
-    {
-        $trades = [];
-        $startTime = Carbon::now()->subYears(2)->getTimestampMs();
-        $limit = 1000;
-
-        try {
-            do {
-                $response = $client->sapiRequest(
-                    'GET',
-                    '/sapi/v1/convert/tradeFlow',
-                    [
-                        'startTime' => $startTime,
-                        'limit' => $limit,
-                        'recvWindow' => 60000,
-                    ],
-                    true
-                );
-
-                if (!is_array($response) || empty($response)) {
-                    break;
-                }
-
-                $trades = array_merge($trades, $response);
-                
-                // Atualizar startTime para próxima página
-                $lastTrade = end($response);
-                $startTime = $lastTrade['createTime'] + 1;
-
-                // Rate limiting - 300ms entre chamadas
-                usleep(300_000);
-
-            } while (count($response) === $limit);
-
-        } catch (Exception $e) {
-            Log::error('Erro ao buscar histórico da Binance: ' . $e->getMessage());
-            throw $e;
-        }
-
-        return $trades;
-    }
-
-    /**
-     * Calcula valor em USDT de uma transação
-     */
-    private function calculateUsdtValue($trade)
-    {
-        // Se uma das moedas for USDT, usar o valor diretamente
-        if ($trade['fromAsset'] === 'USDT') {
-            return $trade['fromAmount'];
-        }
-        
-        if ($trade['toAsset'] === 'USDT') {
-            return $trade['toAmount'];
-        }
-
-        // TODO: Implementar conversão para USDT usando preços históricos
-        return null;
-    }
-
-    /**
-     * Mostra página de importação
+     * Mostra a página de importação.
      */
     public function import()
     {
-        $exchanges = Exchange::all();
-        $userApiKeys = UserApiKey::where('user_id', auth()->id())
-            ->with('exchange')
-            ->get();
-
         return Inertia::render('Transactions/Import', [
-            'exchanges' => $exchanges,
-            'userApiKeys' => $userApiKeys,
+            'exchanges' => \App\Models\Exchange::all(),
+            'userApiKeys' => UserApiKey::where('user_id', auth()->id())->with('exchange')->get(),
         ]);
     }
 
     /**
-     * Sincroniza transações de uma exchange específica
+     * Ponto de entrada da API para sincronizar transações de uma exchange.
+     * Delega a lógica para o serviço apropriado.
      */
-    public function syncFromExchange(Request $request)
-    {
-        $request->validate([
-            'exchange' => 'required|string',
-        ]);
-
-        return $this->importFromExchange($request->exchange);
-    }
-
-
- protected function getSpotTrades($client): array
+    public function syncFromExchange(Request $request, string $exchange)
 {
-    $trades = [];
+    // Log inicial para confirmar que a requisição chegou.
+    Log::info("✅ [PONTO DE ENTRADA] Requisição para iniciar importação da exchange '{$exchange}'.");
 
-    // Lista de sufixos de quote conhecidos
-    $quoteAssets = ['USDT', 'BUSD', 'BTC', 'ETH', 'BNB', 'TRY', 'EUR', 'BRL', 'USD', 'TUSD', 'FDUSD', 'DAI'];
+    // Validação simples para garantir que o nome da exchange é válido.
+    $validated = validator(['exchange' => $exchange], ['exchange' => 'required|string|in:binance'])->validate();
 
-    // Lista de ativos cadastrados
-    $symbols = CryptoAsset::pluck('symbol')
-        ->filter()
-        ->map(fn($s) => strtoupper($s))
-        ->unique()
-        ->values();
-
-    \Log::debug('[Binance Spot] Símbolos base cadastrados: ', $symbols->toArray());
-
-    // CORREÇÃO: Sincroniza horário com o servidor da Binance ANTES de qualquer operação
     try {
-        $client->useServerTime();
-        usleep(500000); // 500ms para garantir sincronização
-        \Log::info("[Binance Spot] Tempo sincronizado com sucesso.");
-    } catch (\Exception $e) {
-        \Log::warning("[Binance Spot] Falha ao sincronizar horário: {$e->getMessage()}");
-        return []; // Retorna vazio se não conseguir sincronizar
+        // Usa o 'match' para decidir qual Job despachar.
+        // Isso torna fácil adicionar outras exchanges no futuro.
+        match (strtolower($validated['exchange'])) {
+            'binance' => ProcessBinanceImport::dispatch(auth()->user()),
+            // 'coinbase' => ProcessCoinbaseImport::dispatch(auth()->user()), // Exemplo futuro
+            default => throw new Exception("A exchange '{$validated['exchange']}' não é suportada."),
+        };
+
+        Log::info("✅ [PONTO DE ENTRADA] Job de importação para '{$validated['exchange']}' despachado com sucesso para o usuário: " . auth()->id());
+
+        // Retorna uma resposta IMEDIATA para o front-end.
+        // O status 202 (Accepted) é o padrão para "Ok, recebi seu pedido e vou processá-lo".
+        return redirect()->back();
+
+    } catch (Exception $e) {
+        Log::error("🚨 [PONTO DE ENTRADA] Falha ao despachar o Job de importação.", [
+            'exchange' => $exchange,
+            'error' => $e->getMessage()
+        ]);
+        return response()->json(['error' => 'Não foi possível iniciar o processo de importação.'], 500);
     }
-
-    // Obtém todos os pares válidos da Binance
-    try {
-        $exchangeInfo = $client->exchangeInfo();
-        $validSymbols = collect($exchangeInfo['symbols'])
-            ->filter(fn($s) => $s['status'] === 'TRADING' && $s['isSpotTradingAllowed'])
-            ->pluck('symbol')
-            ->values();
-
-        \Log::debug('[Binance Spot] Pares válidos da Binance filtrados: ', $validSymbols->toArray());
-    } catch (\Exception $e) {
-        \Log::error("[Binance Spot] Erro ao obter informações da exchange: {$e->getMessage()}");
-        return [];
-    }
-
-    // Filtra os pares que envolvem ativos cadastrados
-    $pairSymbols = $validSymbols->filter(function ($symbol) use ($symbols, $quoteAssets) {
-        foreach ($quoteAssets as $quote) {
-            if (str_ends_with($symbol, $quote)) {
-                $base = substr($symbol, 0, -strlen($quote));
-                if ($symbols->contains($base) && $symbols->contains($quote)) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    })->values();
-
-    // CORREÇÃO: Processar apenas alguns pares por vez para evitar rate limit
-    $processedCount = 0;
-    $maxPairs = 10; // Limitar para teste
-
-    foreach ($pairSymbols->take($maxPairs) as $symbol) {
-        $fromId = null;
-        $hasMore = true;
-        $attempts = 0;
-        $maxAttempts = 3;
-
-        while ($hasMore && $attempts < $maxAttempts) {
-            try {
-                // CORREÇÃO: Sincronizar antes de cada chamada individual
-                $client->useServerTime();
-                usleep(1000000); // 1 segundo entre chamadas para evitar rate limit
-                
-                $result = $client->myTrades($symbol);
-
-                if (empty($result)) {
-                    \Log::info("[Binance Spot] Nenhum trade encontrado para {$symbol}");
-                    break;
-                }
-
-                foreach ($result as $trade) {
-                    $baseAsset = null;
-                    $quoteAsset = null;
-
-                    foreach ($quoteAssets as $quote) {
-                        if (str_ends_with($symbol, $quote)) {
-                            $baseAsset = substr($symbol, 0, -strlen($quote));
-                            $quoteAsset = $quote;
-                            break;
-                        }
-                    }
-
-                    if (!$baseAsset || !$quoteAsset) {
-                        \Log::warning("[Binance Spot] Falha ao extrair base/quote de {$symbol}");
-                        continue;
-                    }
-
-                    $isBuyer = $trade['isBuyer'];
-
-                    $fromAsset  = $isBuyer ? $quoteAsset : $baseAsset;
-                    $toAsset    = $isBuyer ? $baseAsset : $quoteAsset;
-                    $fromAmount = $isBuyer ? $trade['quoteQty'] : $trade['qty'];
-                    $toAmount   = $isBuyer ? $trade['qty'] : $trade['quoteQty'];
-
-                    $trades[] = [
-                        'user_id'      => auth()->id(),
-                        'from_asset'   => $fromAsset,
-                        'to_asset'     => $toAsset,
-                        'from_amount'  => $fromAmount,
-                        'to_amount'    => $toAmount,
-                        'type'         => 'spot',
-                        'operation'    => $isBuyer ? 'compra' : 'venda',
-                        'price'        => $trade['price'],
-                        'total_usdt'   => $quoteAsset === 'USDT' ? $trade['quoteQty'] : null,
-                        'total_brl'    => null,
-                        'txid'         => null,
-                        'source'       => 'binance',
-                        'reference'    => $trade['orderId'],
-                        'date'         => \Carbon\Carbon::createFromTimestampMs($trade['time']),
-                    ];
-
-                    $fromId = $trade['id'] + 1;
-                }
-
-                $hasMore = count($result) === 500;
-                $attempts = 0; // Reset attempts on success
-
-                \Log::info("[Binance Spot] Processados " . count($result) . " trades para {$symbol}");
-
-            } catch (\Exception $e) {
-                $attempts++;
-                \Log::warning("[Binance Spot] Erro ao buscar trades para {$symbol} (tentativa {$attempts}): {$e->getMessage()}");
-                
-                if ($attempts >= $maxAttempts) {
-                    \Log::error("[Binance Spot] Máximo de tentativas excedido para {$symbol}");
-                    break;
-                }
-                
-                // Aguardar mais tempo antes de tentar novamente
-                usleep(2000000); // 2 segundos
-            }
-        }
-
-        $processedCount++;
-        \Log::info("[Binance Spot] Progresso: {$processedCount}/{$maxPairs} pares processados");
-    }
-
-    \Log::info("[Binance Spot] Total de trades coletados: " . count($trades));
-    return $trades;
 }
 
+    /**
+     * Lida com a importação da Binance instanciando e chamando o BinanceImportService.
+     */
+// Em app/Http/Controllers/TransactionController.php
 
-public function importCsv(Request $request)
+/**
+ * Lida com a importação da Binance, com tratamento de erro para chave de API ausente.
+ */
+private function handleBinanceImport(Request $request): \Illuminate\Http\JsonResponse
+{
+    try {
+        // ✅ LOG ADICIONADO AQUI para ver se o método é alcançado
+        Log::info("[Controller] Tentando instanciar o BinanceImportService.");
+
+        $importService = new BinanceImportService(auth()->user());
+        $result = $importService->runSmartImport();
+        
+        return response()->json($result);
+
+    } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
+        // ✅ CAPTURA ESPECÍFICA para o erro 'firstOrFail'
+        Log::error("[Controller] Falha ao iniciar a importação: Chave de API da Binance não encontrada para o usuário " . auth()->id());
+        return response()->json(['error' => 'Chave de API da Binance não encontrada. Por favor, cadastre uma chave de API válida antes de importar.'], 404);
+
+    } catch (Exception $e) {
+        // Captura genérica para outros erros
+        Log::error("[Controller] Falha crítica no handleBinanceImport: " . $e->getMessage());
+        return response()->json(['error' => $e->getMessage()], 400);
+    }
+}
+
+    
+    public function importCsv(Request $request)
 {
     $validated = $request->validate([
-        'file' => 'required|file|mimes:csv,txt|max:10240',
+        'file' => 'required|file|mimes:csv,txt,xlsx|max:10240',
         'format' => 'required|string',
         'skip_duplicates' => 'boolean',
         'source_type' => 'required|in:exchange,wallet',
@@ -731,45 +436,530 @@ public function importCsv(Request $request)
 
     $source = $sourceModel::where('user_id', auth()->id())->findOrFail($validated['source_id']);
 
-    // 🔍 Lê o CSV
-    $csv = array_map('str_getcsv', file($request->file('file')));
-    $headers = array_map('trim', $csv[0]);
-    $rows = array_slice($csv, 1);
+    $uploadedFile = $request->file('file');
+    $extension = strtolower($uploadedFile->getClientOriginalExtension());
+    [$headers, $rows] = $this->extractRowsFromImportedFile($uploadedFile->getRealPath(), $extension);
 
     $imported = 0;
 
+    $skipDuplicates = (bool) ($validated['skip_duplicates'] ?? false);
+
     foreach ($rows as $row) {
         $data = array_combine($headers, $row);
+        if (!$data || !array_filter($data, fn($value) => !is_null($value) && trim((string)$value) !== '')) {
+            continue;
+        }
 
-        // Ajuste este mapeamento conforme seu formato real de CSV
-        $transactionData = [
-            'user_id' => auth()->id(),
-            'source_type' => $sourceModel,
-            'source_id' => $source->id,
-            'from_asset' => $data['from_asset'] ?? null,
-            'to_asset' => $data['to_asset'] ?? null,
-            'from_amount' => $data['from_amount'] ?? null,
-            'to_amount' => $data['to_amount'] ?? null,
-            'price' => $data['price'] ?? null,
-            'total_usdt' => $data['total_usdt'] ?? null,
-            'total_brl' => $data['total_brl'] ?? null,
-            'type' => $data['type'] ?? 'other',
-            'operation' => $data['operation'] ?? null,
-            'txid' => $data['txid'] ?? null,
-            'reference' => $data['reference'] ?? null,
-            'date' => isset($data['date']) ? \Carbon\Carbon::parse($data['date']) : now(),
-        ];
+        $transactionData = $this->mapImportedRowToTransactionData($data, $validated['format'], $sourceModel, (int)$source->id);
+        if ($transactionData === null) {
+            continue;
+        }
 
-        // Aqui você pode usar updateOrCreate se quiser evitar duplicatas com base em txid ou reference
+        if ($skipDuplicates && $this->transactionAlreadyExists($transactionData)) {
+            continue;
+        }
+
         Transaction::create($transactionData);
         $imported++;
     }
 
-    return redirect()->route('transactions.index')->with('success', "{$imported} transações importadas com sucesso.");
+    return redirect()->route('transactions.index')
+        ->with('success', "{$imported} transações importadas com sucesso.");
 }
 
+private function mapImportedRowToTransactionData(array $data, string $format, string $sourceModel, int $sourceId): ?array
+{
+    if ($format === 'binance') {
+        $mapped = $this->mapBinanceRowToTransactionData($data, $sourceModel, $sourceId);
+        if ($mapped === null) {
+            return null;
+        }
 
+        return $this->enrichTransactionFiatValues($mapped);
+    }
 
+    $mapped = [
+        'user_id' => auth()->id(),
+        'source_type' => $sourceModel,
+        'source_id' => $sourceId,
+        'from_asset' => $data['from_asset'] ?? null,
+        'to_asset' => $data['to_asset'] ?? null,
+        'from_amount' => $this->parseNumeric($data['from_amount'] ?? null),
+        'to_amount' => $this->parseNumeric($data['to_amount'] ?? null),
+        'price' => $this->parseNumeric($data['price'] ?? null),
+        'total_usdt' => $this->parseNumeric($data['total_usdt'] ?? null),
+        'total_brl' => $this->parseNumeric($data['total_brl'] ?? null),
+        'type' => $data['type'] ?? 'other',
+        'operation' => $data['operation'] ?? null,
+        'txid' => $data['txid'] ?? null,
+        'reference' => $data['reference'] ?? null,
+        'date' => isset($data['date']) ? \Carbon\Carbon::parse($data['date']) : now(),
+    ];
 
+    return $this->enrichTransactionFiatValues($mapped);
+}
 
+private function mapBinanceRowToTransactionData(array $data, string $sourceModel, int $sourceId): ?array
+{
+    $normalized = [];
+    foreach ($data as $key => $value) {
+        $normKey = Str::of((string)$key)->lower()->ascii()->replaceMatches('/[^a-z0-9]+/', '_')->trim('_')->toString();
+        $normalized[$normKey] = $value;
+    }
+
+    // Layout do relatório anual CSV da Binance
+    if (isset($normalized['sent_amount']) && isset($normalized['received_amount'])) {
+        $fromAmount = $this->parseNumeric($normalized['sent_amount'] ?? null);
+        $toAmount = $this->parseNumeric($normalized['received_amount'] ?? null);
+        $fromAsset = strtoupper(trim((string)($normalized['sent_currency'] ?? '')));
+        $toAsset = strtoupper(trim((string)($normalized['received_currency'] ?? '')));
+        $marketType = strtoupper(trim((string)($normalized['market_model_type'] ?? '')));
+        $eventType = strtoupper(trim((string)($normalized['type'] ?? 'TRADE')));
+        $dateRawAnnual = $normalized['datetime_tz_brt']
+            ?? $normalized['datetime_tz_gmt_03_00']
+            ?? $normalized['datetime']
+            ?? $normalized['date']
+            ?? null;
+        $referenceId = $normalized['id'] ?? null;
+
+        if (!$fromAsset || !$toAsset || !$fromAmount || !$toAmount) {
+            return null;
+        }
+
+        $totalBrlAnnual = $this->parseNumeric($normalized['sent_value_brl'] ?? null)
+            ?? $this->parseNumeric($normalized['received_value_brl'] ?? null);
+
+        $stablecoins = ['USDT', 'USDC', 'BUSD', 'TUSD', 'FDUSD'];
+        $totalUsdtAnnual = null;
+        if (in_array($fromAsset, $stablecoins, true)) {
+            $totalUsdtAnnual = $fromAmount;
+        } elseif (in_array($toAsset, $stablecoins, true)) {
+            $totalUsdtAnnual = $toAmount;
+        }
+
+        // Preço unitário em moeda "from" por unidade de "to"
+        $priceAnnual = $toAmount > 0 ? ($fromAmount / $toAmount) : 0.0;
+
+        return [
+            'user_id' => auth()->id(),
+            'source_type' => $sourceModel,
+            'source_id' => $sourceId,
+            'from_asset' => $fromAsset,
+            'to_asset' => $toAsset,
+            'from_amount' => $fromAmount,
+            'to_amount' => $toAmount,
+            'price' => $priceAnnual,
+            'total_usdt' => $totalUsdtAnnual,
+            'total_brl' => $totalBrlAnnual,
+            'type' => $eventType === 'TRADE' ? ($marketType === 'CONVERT' ? 'convert' : 'trade') : strtolower($eventType),
+            'operation' => strtolower($marketType ?: $eventType),
+            'txid' => $referenceId,
+            'reference' => $referenceId,
+            'date' => $this->parseBinanceDateValue($dateRawAnnual),
+        ];
+    }
+
+    $pair = strtoupper((string)($normalized['pair'] ?? $normalized['symbol'] ?? ''));
+    $side = strtoupper((string)($normalized['side'] ?? $normalized['tipo'] ?? ''));
+    $price = $this->parseNumeric($normalized['price'] ?? $normalized['preco'] ?? null);
+    $executed = $this->parseNumeric($normalized['executed'] ?? $normalized['filled'] ?? $normalized['executado'] ?? null);
+    $amount = $this->parseNumeric($normalized['amount'] ?? $normalized['quantity'] ?? $normalized['quantidade'] ?? null);
+    $total = $this->parseNumeric($normalized['total'] ?? null);
+    $sellRaw = $normalized['sell'] ?? null;
+    $buyRaw = $normalized['buy'] ?? null;
+    $dateRaw = $normalized['date_utc'] ?? $normalized['date'] ?? $normalized['data'] ?? null;
+
+    // Suporte ao layout "Convert/Instant" da Binance: colunas Sell/Buy (ex: "25.2 BNX")
+    if ($sellRaw && $buyRaw) {
+        [$fromAmount, $fromAsset] = $this->parseAmountAssetCell((string)$sellRaw);
+        [$toAmount, $toAsset] = $this->parseAmountAssetCell((string)$buyRaw);
+
+        if (!$fromAsset || !$toAsset || !$fromAmount || !$toAmount) {
+            return null;
+        }
+
+        $derivedPair = $pair ?: ($toAsset . $fromAsset);
+        [, $quoteAsset] = $this->splitTradingPair($derivedPair);
+
+        return [
+            'user_id' => auth()->id(),
+            'source_type' => $sourceModel,
+            'source_id' => $sourceId,
+            'from_asset' => $fromAsset,
+            'to_asset' => $toAsset,
+            'from_amount' => $fromAmount,
+            'to_amount' => $toAmount,
+            'price' => $price,
+            'total_usdt' => in_array($fromAsset, ['USDT', 'FDUSD', 'USDC', 'BUSD', 'TUSD'], true) ? $fromAmount : (in_array($toAsset, ['USDT', 'FDUSD', 'USDC', 'BUSD', 'TUSD'], true) ? $toAmount : null),
+            'total_brl' => $fromAsset === 'BRL' ? $fromAmount : ($toAsset === 'BRL' ? $toAmount : null),
+            'type' => 'convert',
+            'operation' => strtolower((string)($normalized['type'] ?? 'convert')),
+            'txid' => $normalized['id'] ?? null,
+            'reference' => $normalized['id'] ?? null,
+            'date' => $this->parseBinanceDateValue($dateRaw),
+        ];
+    }
+
+    if (!$pair || !$side) {
+        return null;
+    }
+
+    [$baseAsset, $quoteAsset] = $this->splitTradingPair($pair);
+    if (!$baseAsset || !$quoteAsset) {
+        return null;
+    }
+
+    $qty = $executed ?? $amount ?? 0.0;
+    if ($qty <= 0) {
+        return null;
+    }
+
+    $quoteTotal = $total ?? (($price ?? 0) * $qty);
+    $isBuy = $side === 'BUY' || $side === 'COMPRA';
+
+    return [
+        'user_id' => auth()->id(),
+        'source_type' => $sourceModel,
+        'source_id' => $sourceId,
+        'from_asset' => $isBuy ? $quoteAsset : $baseAsset,
+        'to_asset' => $isBuy ? $baseAsset : $quoteAsset,
+        'from_amount' => $isBuy ? $quoteTotal : $qty,
+        'to_amount' => $isBuy ? $qty : $quoteTotal,
+        'price' => $price,
+        'total_usdt' => in_array($quoteAsset, ['USDT', 'FDUSD', 'USDC', 'BUSD', 'TUSD'], true) ? $quoteTotal : null,
+        'total_brl' => $quoteAsset === 'BRL' ? $quoteTotal : null,
+        'type' => 'trade',
+        'operation' => strtolower($side),
+        'txid' => $normalized['order_no'] ?? $normalized['ordem'] ?? null,
+        'reference' => $normalized['order_no'] ?? $normalized['id'] ?? null,
+        'date' => $this->parseBinanceDateValue($dateRaw),
+    ];
+}
+
+private function parseAmountAssetCell(string $value): array
+{
+    $value = trim($value);
+    if ($value === '') {
+        return [null, null];
+    }
+
+    if (preg_match('/^([0-9\.,]+)\s+([A-Za-z0-9]+)$/', $value, $m)) {
+        return [$this->parseNumeric($m[1]), strtoupper($m[2])];
+    }
+
+    return [null, null];
+}
+
+private function parseBinanceDateValue($dateRaw): Carbon
+{
+    if (!$dateRaw) {
+        return now();
+    }
+
+    $dateString = trim((string)$dateRaw);
+    $formats = [
+        'Y-m-d-H:i:s', // ex: 2022-06-13-09:02:07 (datetime_tz_BRT)
+        'Y-m-d H:i:s', // ex: 2025-02-28 20:19:58
+        'Y-m-d\TH:i:sP',
+    ];
+
+    foreach ($formats as $format) {
+        try {
+            return Carbon::createFromFormat($format, $dateString);
+        } catch (\Throwable $e) {
+            // tenta próximo formato
+        }
+    }
+
+    return Carbon::parse($dateString);
+}
+
+private function enrichTransactionFiatValues(array $tx): array
+{
+    $date = $tx['date'] instanceof Carbon ? $tx['date'] : Carbon::parse($tx['date']);
+    $fromAsset = strtoupper((string)($tx['from_asset'] ?? ''));
+    $toAsset = strtoupper((string)($tx['to_asset'] ?? ''));
+    $fromAmount = (float)($tx['from_amount'] ?? 0);
+    $toAmount = (float)($tx['to_amount'] ?? 0);
+    $price = $tx['price'] ?? null;
+    $totalUsdt = $tx['total_usdt'] ?? null;
+    $totalBrl = $tx['total_brl'] ?? null;
+
+    // Se já veio totalmente preenchido, mantém.
+    if (($price ?? 0) > 0 && ($totalUsdt ?? 0) > 0 && ($totalBrl ?? 0) > 0) {
+        return $tx;
+    }
+
+    $stablecoins = ['USDT', 'USDC', 'BUSD', 'TUSD', 'FDUSD'];
+    $priceService = app(CryptoPriceService::class);
+
+    // 1) Determina total em USD/USDT preferindo a perna fiat/stable.
+    if (($totalUsdt ?? 0) <= 0) {
+        if (in_array($fromAsset, $stablecoins, true) && $fromAmount > 0) {
+            $totalUsdt = $fromAmount;
+        } elseif (in_array($toAsset, $stablecoins, true) && $toAmount > 0) {
+            $totalUsdt = $toAmount;
+        } else {
+            // 2) Cripto-cripto puro: usa preço histórico da perna "to" e fallback na "from".
+            if ($toAsset && $toAmount > 0) {
+                $toPrices = $priceService->getOrCreatePrice($toAsset, $date);
+                if (($toPrices->price_usd ?? 0) > 0) {
+                    $totalUsdt = $toAmount * (float)$toPrices->price_usd;
+                }
+            }
+
+            if (($totalUsdt ?? 0) <= 0 && $fromAsset && $fromAmount > 0) {
+                $fromPrices = $priceService->getOrCreatePrice($fromAsset, $date);
+                if (($fromPrices->price_usd ?? 0) > 0) {
+                    $totalUsdt = $fromAmount * (float)$fromPrices->price_usd;
+                }
+            }
+        }
+    }
+
+    // 3) Converte USD/USDT para BRL.
+    if (($totalBrl ?? 0) <= 0 && ($totalUsdt ?? 0) > 0) {
+        $usdBrl = $priceService->getOrCreatePrice('USDT', $date);
+        if (($usdBrl->price_brl ?? 0) > 0) {
+            $totalBrl = (float)$totalUsdt * (float)$usdBrl->price_brl;
+        }
+    }
+
+    // 4) Preço unitário (por unidade do ativo de entrada/saída) se não veio no arquivo.
+    if (($price ?? 0) <= 0) {
+        if ($toAmount > 0 && ($totalUsdt ?? 0) > 0) {
+            $price = (float)$totalUsdt / $toAmount;
+        } elseif ($fromAmount > 0 && ($totalUsdt ?? 0) > 0) {
+            $price = (float)$totalUsdt / $fromAmount;
+        } else {
+            $price = 0;
+        }
+    }
+
+    $tx['price'] = $price;
+    $tx['total_usdt'] = $totalUsdt;
+    $tx['total_brl'] = $totalBrl;
+
+    return $tx;
+}
+
+private function splitTradingPair(string $pair): array
+{
+    $quoteAssets = ['USDT', 'FDUSD', 'USDC', 'BUSD', 'TUSD', 'BRL', 'BTC', 'ETH', 'BNB', 'EUR', 'TRY'];
+    foreach ($quoteAssets as $quote) {
+        if (str_ends_with($pair, $quote) && strlen($pair) > strlen($quote)) {
+            return [substr($pair, 0, -strlen($quote)), $quote];
+        }
+    }
+
+    return [null, null];
+}
+
+private function parseNumeric($value): ?float
+{
+    if ($value === null || $value === '') {
+        return null;
+    }
+
+    $normalized = str_replace([' ', ','], ['', '.'], (string)$value);
+    return is_numeric($normalized) ? (float)$normalized : null;
+}
+
+private function transactionAlreadyExists(array $transactionData): bool
+{
+    // Para formatos que trazem identificador único da exchange (ex.: CSV anual Binance),
+    // deduplica por referência primeiro para não colapsar linhas distintas com mesmos valores.
+    if (!empty($transactionData['reference'])) {
+        return Transaction::query()
+            ->where('user_id', $transactionData['user_id'])
+            ->where('source_type', $transactionData['source_type'])
+            ->where('source_id', $transactionData['source_id'])
+            ->where('reference', $transactionData['reference'])
+            ->exists();
+    }
+
+    $query = Transaction::query()
+        ->where('user_id', $transactionData['user_id'])
+        ->where('source_type', $transactionData['source_type'])
+        ->where('source_id', $transactionData['source_id'])
+        ->where('type', $transactionData['type'])
+        ->where('from_asset', $transactionData['from_asset'])
+        ->where('to_asset', $transactionData['to_asset'])
+        ->where('date', $transactionData['date']);
+
+    if (isset($transactionData['from_amount'])) {
+        $query->where('from_amount', $transactionData['from_amount']);
+    }
+
+    if (isset($transactionData['to_amount'])) {
+        $query->where('to_amount', $transactionData['to_amount']);
+    }
+
+    return $query->exists();
+}
+
+private function extractRowsFromImportedFile(string $filePath, string $extension): array
+{
+    if (in_array($extension, ['csv', 'txt'], true)) {
+        $csv = array_map('str_getcsv', file($filePath));
+        if (empty($csv)) {
+            throw new \RuntimeException('Arquivo CSV vazio.');
+        }
+
+        $headers = array_map('trim', $csv[0]);
+        $rows = array_slice($csv, 1);
+
+        return [$headers, $rows];
+    }
+
+    if ($extension === 'xlsx') {
+        $reader = new XlsxReader();
+        $reader->open($filePath);
+
+        try {
+            $sheetRows = [];
+            foreach ($reader->getSheetIterator() as $sheet) {
+                foreach ($sheet->getRowIterator() as $row) {
+                    $sheetRows[] = $row->toArray();
+                }
+                break; // Usa apenas a primeira aba.
+            }
+
+            if (empty($sheetRows)) {
+                throw new \RuntimeException('Arquivo XLSX vazio.');
+            }
+
+            $headers = array_map(static fn ($value) => trim((string) $value), $sheetRows[0] ?? []);
+            $rows = array_slice($sheetRows, 1);
+
+            return [$headers, $rows];
+        } finally {
+            $reader->close();
+        }
+    }
+
+    throw new \RuntimeException('Formato de arquivo não suportado.');
+}
+
+    // ===================================================================
+    // LÓGICA FISCAL (MANTER POR ENQUANTO)
+    // ===================================================================
+   public function rebuildBalancesBackward(Request $request)
+{
+    $apiKey = UserApiKey::where('user_id', auth()->id())
+        ->whereHas('exchange', fn($q) => $q->where('name', 'binance'))
+        ->first();
+
+    if (!$apiKey) {
+        return response()->json(['error' => 'Chave Binance não encontrada.'], 404);
+    }
+
+    // Inicializa o serviço de conversão se não estiver inicializado
+    if (!isset($this->convertService)) {
+        $this->convertService = new BinanceConvertService($apiKey);
+    }
+
+    Log::info('[Reconstrução Fiscal] Iniciando reconstrução reversa mês a mês.');
+
+    $balances = $this->getCurrentBalances($apiKey);
+    $currentDate = Carbon::now()->startOfMonth();
+    $maxMonths = 60; // Limite de 5 anos
+    $iteration = 0;
+
+    while (!empty($balances) && $iteration < $maxMonths) {
+        $monthStart = $currentDate->copy()->subMonth()->startOfMonth();
+        $monthEnd   = $currentDate->copy()->subMonth()->endOfMonth();
+
+        Log::info("[Reconstrução Fiscal] Mês alvo: {$monthStart->format('Y-m')} — Ativos: " . implode(', ', array_keys($balances)));
+
+        foreach (array_keys($balances) as $asset) {
+            $trades = $this->getAssetTradesByMonth($apiKey, $asset, $monthStart, $monthEnd);
+            $converts = $this->convertService->getConvertHistory($monthStart->getTimestampMs(), $monthEnd->getTimestampMs());
+
+            foreach (array_merge($trades, $converts) as $tx) {
+                $qty = (float)($tx['qty'] ?? $tx['toAmount'] ?? 0);
+                $isBuyer = $tx['isBuyer'] ?? ($tx['side'] ?? 'BUY') === 'BUY';
+
+                if ($isBuyer) $balances[$asset] -= $qty;
+                else $balances[$asset] += $qty;
+
+                if ($balances[$asset] <= 0.0001) unset($balances[$asset]);
+            }
+        }
+
+        Log::info("[Reconstrução Fiscal] Após {$monthStart->format('Y-m')}, saldos remanescentes:", $balances);
+
+        $currentDate->subMonth();
+        $iteration++;
+    }
+
+    Log::info('[Reconstrução Fiscal] Finalizado com sucesso.', [
+        'total_meses' => $iteration,
+        'ativos_restantes' => array_keys($balances),
+    ]);
+
+    return response()->json([
+        'success' => true,
+        'months_processed' => $iteration,
+        'remaining_balances' => $balances
+    ]);
+}
+
+private function getCurrentBalances(UserApiKey $apiKey): array
+{
+    $params = [
+        'timestamp'  => round(microtime(true) * 1000),
+        'recvWindow' => 15000,
+    ];
+    $params['signature'] = hash_hmac('sha256', http_build_query($params ), $apiKey->secret_key);
+
+    $response = Http::withHeaders(['X-MBX-APIKEY' => $apiKey->api_key])
+        ->get('https://api.binance.com/api/v3/account', $params );
+
+    if (!$response->successful()) {
+        Log::error('[Reconstrução] Erro ao obter saldos.', [
+            'status' => $response->status(),
+            'body'   => $response->body(),
+        ]);
+        return [];
+    }
+
+    return collect($response->json('balances') ?? [])
+        ->filter(fn($b) => (float)$b['free'] > 0 || (float)$b['locked'] > 0)
+        ->mapWithKeys(fn($b) => [$b['asset'] => (float)$b['free'] + (float)$b['locked']])
+        ->toArray();
+}
+
+private function getAssetTradesByMonth(UserApiKey $apiKey, string $asset, Carbon $monthStart, Carbon $monthEnd): array
+{
+    $quoteAssets = ['USDT', 'BTC', 'BUSD', 'BRL'];
+    $baseUrl = 'https://api.binance.com/api/v3/myTrades';
+    $trades = [];
+
+    foreach ($quoteAssets as $quote ) {
+        if ($asset === $quote) continue;
+
+        $symbol = "{$asset}{$quote}";
+        $params = [
+            'symbol'     => $symbol,
+            'limit'      => 1000,
+            'startTime'  => $monthStart->getTimestampMs(),
+            'endTime'    => $monthEnd->getTimestampMs(),
+            'timestamp'  => round(microtime(true) * 1000),
+            'recvWindow' => 15000,
+        ];
+        $params['signature'] = hash_hmac('sha256', http_build_query($params ), $apiKey->secret_key);
+
+        $response = Http::withHeaders(['X-MBX-APIKEY' => $apiKey->api_key])
+            ->get($baseUrl, $params);
+
+        if ($response->successful() && !empty($response->json())) {
+            $trades = array_merge($trades, $response->json());
+        }
+
+        usleep(200000); // evita rate limit
+    }
+
+    return $trades;
+}
 }

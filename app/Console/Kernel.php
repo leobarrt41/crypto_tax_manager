@@ -8,19 +8,30 @@ use Illuminate\Foundation\Console\Kernel as ConsoleKernel;
 class Kernel extends ConsoleKernel
 {
     /**
-     * Define the application's command schedule.
+     * Os comandos Artisan disponíveis para o aplicativo.
+     *
+     * @var array
+     */
+    protected $commands = [
+        \App\Console\Commands\VerifyZeroValueTransactionsCommand::class,
+        \App\Console\Commands\SyncBinanceAnnouncements::class,
+    ];
+
+    /**
+     * Define a agenda de execução dos comandos do aplicativo.
      */
     protected function schedule(Schedule $schedule): void
     {
-        // $schedule->command('inspire')->hourly();
+        // Sincroniza anúncios listagem/deslistagem para manter vigência de pares/ativos atualizada.
+        $schedule->command('binance:sync-announcements')->dailyAt('03:30');
     }
 
     /**
-     * Register the commands for the application.
+     * Registra os comandos do aplicativo.
      */
     protected function commands(): void
     {
-        $this->load(__DIR__.'/Commands');
+        $this->load(__DIR__ . '/Commands');
 
         require base_path('routes/console.php');
     }

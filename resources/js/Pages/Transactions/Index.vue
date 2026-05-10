@@ -32,29 +32,37 @@
               </svg>
               Nova Transação
             </Link>
+
+              <button
+                    @click="deleteAllTransactions"
+                    class="ml-3 inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+                  >
+                    <svg class="-ml-1 mr-2 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                    Deletar Tudo
+                  </button>
           </div>
         </div>
       </div>
 
-      <!-- Seletor de moeda -->
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mb-2 flex justify-end">
-          <div class="flex items-center space-x-2">
-            <label for="currency" class="text-sm text-gray-700">Exibir valores em:</label>
-            <select 
-              id="currency"
-              v-model="displayCurrency" 
-              class="border border-gray-300 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-primary focus:border-primary"
-            >
-              <option value="brl">BRL</option>
-              <option value="usdt">USDT</option>
-            </select>
-          </div>
+      <!-- CORREÇÃO: Seletor de moeda -->
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mb-2 flex justify-end">
+        <div class="flex items-center space-x-2">
+          <label for="currency" class="text-sm text-gray-700">Exibir valores em:</label>
+          <select 
+            id="currency"
+            v-model="displayCurrency" 
+            class="border border-gray-300 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-primary focus:border-primary"
+            @change="onCurrencyChange"
+          >
+            <option value="BRL">Real (BRL)</option>
+            <option value="USDT">Dólar (USDT)</option>
+          </select>
         </div>
+      </div>
 
-
-
-
-      <!-- Stats Cards -->
+      <!-- CORREÇÃO: Stats Cards -->
       <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-6">
         <div class="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
           <StatCard
@@ -64,14 +72,13 @@
             icon="chart-bar"
             color="blue"
           />
-                    <StatCard
-          title="Volume Total"
-          :value="displayCurrency === 'brl' ? stats.total_brl : stats.total_usdt"
-          :format="displayCurrency === 'brl' ? 'currency' : 'decimal'"
-          icon="currency-dollar"
-          color="green"
-        />
-
+          <StatCard
+            title="Volume Total"
+            :value="totalVolume"
+            :format="displayCurrency === 'BRL' ? 'currency-brl' : 'currency-usd'"
+            icon="currency-dollar"
+            color="green"
+          />
           <StatCard
             title="Este Mês"
             :value="stats.this_month"
@@ -81,10 +88,10 @@
           />
           <StatCard
             title="Lucro/Prejuízo"
-            :value="stats.profit_loss"
-            format="currency"
+            :value="profitLoss"
+            :format="displayCurrency === 'BRL' ? 'currency-brl' : 'currency-usd'"
             icon="trending-up"
-            :color="stats.profit_loss >= 0 ? 'green' : 'red'"
+            :color="profitLoss >= 0 ? 'green' : 'red'"
           />
         </div>
       </div>
@@ -117,12 +124,12 @@
                 @change="applyFilters"
               >
                 <option value="">Todos os tipos</option>
-                <option value="buy">Compra</option>
-                <option value="sell">Venda</option>
-                <option value="transfer">Transferência</option>
+                <option value="trade">Spot</option>
+                <option value="convert">Convert</option>
+                <option value="deposit">Depósito</option>
+                <option value="withdrawal">Saque</option>
                 <option value="mining">Mineração</option>
                 <option value="staking">Staking</option>
-                <option value="airdrop">Airdrop</option>
               </select>
             </div>
 
@@ -155,7 +162,6 @@
                 <option value="today">Hoje</option>
                 <option value="week">Esta semana</option>
                 <option value="month">Este mês</option>
-                <option value="quarter">Este trimestre</option>
                 <option value="year">Este ano</option>
                 <option value="custom">Personalizado</option>
               </select>
@@ -221,7 +227,6 @@
             <p class="mt-2 text-sm text-gray-500">Carregando transações...</p>
           </div>
 
-          <!-- Empty State -->
           <div v-else-if="transactions.data.length === 0" class="p-6 text-center">
             <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path>
@@ -243,98 +248,102 @@
             </div>
           </div>
 
-          <!-- Transactions List -->
-   <!-- Lista de transações com segurança -->
-<ul v-else class="divide-y divide-gray-200">
-  <li v-for="transaction in transactions?.data || []" :key="transaction?.id">
-    {{ console.log('Transaction ID:', transaction?.id) }}
-    {{ console.log('executed_at:', transaction?.executed_at) }}
-    <div class="px-4 py-4 flex items-center justify-between hover:bg-gray-50">
+          <!-- CORREÇÃO: Transactions List -->
+          <ul v-else class="divide-y divide-gray-200">
+            <li v-for="transaction in transactions?.data || []" :key="transaction?.id">
+              <div class="px-4 py-4 flex items-center justify-between hover:bg-gray-50">
 
-      <!-- Informações da transação -->
-      <div class="flex items-center">
-        <!-- Tipo -->
-        <div class="flex-shrink-0">
-          <div :class="getTypeIconClass(transaction?.type)" class="h-10 w-10 rounded-full flex items-center justify-center">
-            <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path v-if="transaction?.type === 'buy'" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
-              <path v-else-if="transaction?.type === 'sell'" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 12H4"></path>
-              <path v-else stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"></path>
-            </svg>
-          </div>
-        </div>
+                <!-- Informações da transação -->
+                <div class="flex items-center">
+                  <!-- Tipo -->
+                  <div class="flex-shrink-0">
+                    <div :class="getTypeIconClass(transaction?.type)" class="h-10 w-10 rounded-full flex items-center justify-center">
+                      <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path v-if="transaction?.type === 'trade'" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"></path>
+                        <path v-else-if="transaction?.type === 'convert'" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"></path>
+                        <path v-else stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
+                      </svg>
+                    </div>
+                  </div>
+                  
+                  <!-- Detalhes -->
+                  <div class="ml-4">
+                    <div class="flex items-center">
+                      <p class="text-sm font-medium text-gray-900">
+                        {{ getTypeLabel(transaction?.type) }} {{ transaction?.from_asset }} → {{ transaction?.to_asset }}
+                      </p>
+                      <span :class="getTypeClass(transaction?.type)" class="ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium">
+                        {{ getTypeLabel(transaction?.type) }}
+                      </span>
+                    </div>
+                    <div class="mt-1 flex items-center text-sm text-gray-500">
+                      <p>
+                        {{ formatQuantity(transaction?.from_amount) }} {{ transaction?.from_asset }}
+                        → {{ formatQuantity(transaction?.to_amount) }} {{ transaction?.to_asset }}
+                      </p>
+                      <span class="mx-2">&bull;</span>
+                      <p>{{ formatCurrency(getUnitPrice(transaction), displayCurrency.value === 'BRL' ? 'BRL' : 'USDT') }} por unidade</p>
+                      <template v-if="transaction?.fee_brl !== null">
+                        <span class="mx-2">&bull;</span>
+                        <p>Taxa: {{ formatCurrency(transaction?.fee_brl, 'BRL') }}</p>
+                      </template>
+                      <span class="mx-2">&bull;</span>
+                      <p>{{ formatDate(transaction.date) }}</p>
+                    </div>
+                  </div>
+                </div>
 
-        <!-- Detalhes -->
-        <div class="ml-4">
-          <div class="flex items-center">
-            <p class="text-sm font-medium text-gray-900">
-              {{ getTypeLabel(transaction?.type) }} {{ transaction?.from_crypto_asset?.symbol || transaction?.from_asset }}
-            </p>
-            <span :class="getTypeClass(transaction?.type)" class="ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium">
-              {{ getTypeLabel(transaction?.type) }}
-            </span>
-          </div>
-          <div class="mt-1 flex items-center text-sm text-gray-500">
-            <p>{{ formatQuantity(transaction?.quantity) }} {{ transaction?.from_crypto_asset?.symbol || transaction?.from_asset }}</p>
-            <span class="mx-2">&bull;</span>
-            <p>{{ formatCurrency(transaction?.unit_price) }} por unidade</p>
-            <span class="mx-2">&bull;</span>
-           <p>{{ formatDate(transaction.executed_at) }}</p>
-          </div>
-        </div>
-      </div>
+                <!-- CORREÇÃO: Ações -->
+                <div class="flex items-center">
+                  <div class="text-right mr-4">
+                    <p class="text-sm font-medium text-gray-900">
+                      {{ formatCurrency(getDisplayedTotal(transaction), displayCurrency) }}
+                    </p>
+                    <p class="text-xs text-gray-500">
+                      Ref: {{ transaction?.reference || 'N/A' }}
+                    </p>
+                  </div>
 
-      <!-- Ações -->
-      <div class="flex items-center">
-        <div class="text-right mr-4">
-          <p class="text-sm font-medium text-gray-900">
-            {{ formatCurrency(transaction?.total_amount) }}
-          </p>
-          <p v-if="transaction?.fees > 0" class="text-xs text-gray-500">
-            Taxa: {{ formatCurrency(transaction?.fees) }}
-          </p>
-        </div>
-        <div class="flex items-center space-x-2">
-          <Link
-           
-            v-if="transaction?.id && typeof route === 'function'"
-            :href="route('transactions.show', transaction.id)"
-            class="text-primary hover:text-primary-dark"
-          >
-            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-            </svg>
-          </Link>
-          <Link
-            v-if="transaction?.id"
-            :href="`/transactions/${transaction.id}/edit`"
-            class="text-gray-400 hover:text-gray-600"
-          >
-            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-            </svg>
-          </Link>
-          <button
-            v-if="transaction?.id"
-            @click="deleteTransaction(transaction.id)"
-            class="text-red-400 hover:text-red-600"
-          >
-            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-            </svg>
-          </button>
-        </div>
-      </div>
+                  <div class="flex items-center space-x-2">
+                    <Link
+                      v-if="transaction?.id"
+                      :href="route('transactions.show', transaction.id)"
+                      class="text-primary hover:text-primary-dark"
+                    >
+                      <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                      </svg>
+                    </Link>
+                    <Link
+                      v-if="transaction?.id"
+                      :href="`/transactions/${transaction.id}/edit`"
+                      class="text-gray-400 hover:text-gray-600"
+                    >
+                      <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                      </svg>
+                    </Link>
+                    <button
+                      v-if="transaction?.id"
+                      @click="deleteTransaction(transaction.id)"
+                      class="text-red-400 hover:text-red-600"
+                    >
+                      <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
 
-    </div>
-  </li>
-</ul>
-
+              </div>
+            </li>
+          </ul>
 
           <!-- Pagination -->
           <div v-if="transactions.data.length > 0" class="bg-white px-4 py-3 border-t border-gray-200 sm:px-6">
             <div class="flex items-center justify-between">
+              <!-- Mobile Pagination -->
               <div class="flex-1 flex justify-between sm:hidden">
                 <button
                   v-if="transactions.prev_page_url"
@@ -351,6 +360,8 @@
                   Próximo
                 </button>
               </div>
+              
+              <!-- Desktop Pagination -->
               <div class="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
                 <div>
                   <p class="text-sm text-gray-700">
@@ -364,8 +375,62 @@
                   </p>
                 </div>
                 <div>
-                  <nav class="relative z-0 inline-flex rounded-md shadow-sm -space-x-px">
-                    <!-- Pagination buttons would go here -->
+                  <nav class="relative z-0 inline-flex rounded-md shadow-sm -space-x-px" aria-label="Pagination">
+                    <!-- Previous Button -->
+                    <button
+                      @click="goToPage(transactions.current_page - 1)"
+                      :disabled="!transactions.prev_page_url"
+                      :class="[
+                        'relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium',
+                        transactions.prev_page_url 
+                          ? 'text-gray-500 hover:bg-gray-50 cursor-pointer' 
+                          : 'text-gray-300 cursor-not-allowed'
+                      ]"
+                    >
+                      <span class="sr-only">Anterior</span>
+                      <svg class="h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                        <path fill-rule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clip-rule="evenodd" />
+                      </svg>
+                    </button>
+                    
+                    <!-- Page Numbers -->
+                    <template v-for="page in paginationPages" :key="page">
+                      <button
+                        v-if="page !== '...'"
+                        @click="goToPage(page)"
+                        :class="[
+                          'relative inline-flex items-center px-4 py-2 border text-sm font-medium',
+                          page === transactions.current_page
+                            ? 'z-10 bg-primary border-primary text-white'
+                            : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
+                        ]"
+                      >
+                        {{ page }}
+                      </button>
+                      <span
+                        v-else
+                        class="relative inline-flex items-center px-4 py-2 border border-gray-300 bg-white text-sm font-medium text-gray-700"
+                      >
+                        ...
+                      </span>
+                    </template>
+                    
+                    <!-- Next Button -->
+                    <button
+                      @click="goToPage(transactions.current_page + 1)"
+                      :disabled="!transactions.next_page_url"
+                      :class="[
+                        'relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium',
+                        transactions.next_page_url 
+                          ? 'text-gray-500 hover:bg-gray-50 cursor-pointer' 
+                          : 'text-gray-300 cursor-not-allowed'
+                      ]"
+                    >
+                      <span class="sr-only">Próximo</span>
+                      <svg class="h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                        <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd" />
+                      </svg>
+                    </button>
                   </nav>
                 </div>
               </div>
@@ -380,17 +445,16 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { router } from '@inertiajs/vue3'
 import AppLayout from '@/Layouts/AppLayout.vue'
 import StatCard from '@/Components/StatCard.vue'
 import { Link } from '@inertiajs/vue3'
 import { route } from 'ziggy-js'
 
-
-// 1. Definição ausente de `loading`
+// Variáveis de estado
 const loading = ref(false)
-const displayCurrency = ref('brl')
+const displayCurrency = ref('BRL')
 
 // Props
 const props = defineProps({
@@ -400,7 +464,119 @@ const props = defineProps({
   filters: Object,
 })
 
-// Filters reativos
+// CORREÇÃO: Computeds para volume e lucro/prejuízo
+const totalVolume = computed(() => {
+  if (!props.transactions?.data) return 0
+  
+  return props.transactions.data.reduce((sum, tx) => {
+    const value = displayCurrency.value === 'BRL' 
+      ? (tx.total_brl || 0) 
+      : (tx.total_usdt || 0)
+    return sum + Number(value)
+  }, 0)
+})
+
+const profitLoss = computed(() => {
+  // Por enquanto retorna 0, será implementado com FIFO
+  return 0
+})
+
+// CORREÇÃO: Formatação de totais
+const getDisplayedTotal = (transaction) => {
+  if (!transaction) return 0
+  
+  const total = displayCurrency.value === 'BRL'
+    ? (transaction.total_brl || 0)
+    : (transaction.total_usdt || 0)
+  
+  return Number(total)
+}
+
+const getUnitPrice = (transaction) => {
+  if (!transaction) return 0
+
+  const price = Number(transaction.price) || 0
+
+  if (transaction.type !== 'convert') {
+    return price
+  }
+
+  const toAmount = Number(transaction.to_amount) || 0
+  if (toAmount === 0) {
+    return 0
+  }
+
+  if (displayCurrency.value === 'BRL') {
+    const totalBrl = Number(transaction.total_brl) || 0
+    if (totalBrl > 0) {
+      return totalBrl / toAmount
+    }
+  }
+
+  const totalUsdt = Number(transaction.total_usdt) || 0
+  if (totalUsdt > 0) {
+    return totalUsdt / toAmount
+  }
+
+  return price
+}
+
+// Computed para gerar os números de página com elipses
+const paginationPages = computed(() => {
+  if (!props.transactions?.last_page) return []
+  
+  const currentPage = props.transactions.current_page
+  const lastPage = props.transactions.last_page
+  const delta = 2 // Número de páginas a mostrar antes e depois da página atual
+  const pages = []
+  
+  // Se houver 7 ou menos páginas, mostrar todas
+  if (lastPage <= 7) {
+    for (let i = 1; i <= lastPage; i++) {
+      pages.push(i)
+    }
+    return pages
+  }
+  
+  // Sempre mostrar primeira página
+  pages.push(1)
+  
+  // Calcular o intervalo de páginas a mostrar
+  let start = Math.max(2, currentPage - delta)
+  let end = Math.min(lastPage - 1, currentPage + delta)
+  
+  // Ajustar o intervalo se estiver muito próximo do início ou fim
+  if (currentPage - delta <= 2) {
+    end = Math.min(lastPage - 1, 5)
+  }
+  if (currentPage + delta >= lastPage - 1) {
+    start = Math.max(2, lastPage - 4)
+  }
+  
+  // Adicionar elipse após a primeira página se necessário
+  if (start > 2) {
+    pages.push('...')
+  }
+  
+  // Adicionar páginas do intervalo
+  for (let i = start; i <= end; i++) {
+    pages.push(i)
+  }
+  
+  // Adicionar elipse antes da última página se necessário
+  if (end < lastPage - 1) {
+    pages.push('...')
+  }
+  
+  // Sempre mostrar última página
+  if (lastPage > 1) {
+    pages.push(lastPage)
+  }
+  
+  return pages
+})
+
+// Filtros
 const filters = ref({
   search: props.filters?.search || '',
   type: props.filters?.type || '',
@@ -410,10 +586,18 @@ const filters = ref({
   end_date: props.filters?.end_date || '',
 })
 
-// Computed para checar filtros
 const hasFilters = computed(() => Object.values(filters.value).some(v => v !== ''))
 
-// Funções de controle de filtros/paginação
+// CORREÇÃO: Função para mudança de moeda
+const onCurrencyChange = () => {
+  console.log('💱 Moeda alterada para:', displayCurrency.value)
+  // Força reatividade dos computeds
+}
+
+
+
+
+// Ações
 const applyFilters = () => {
   loading.value = true
   router.get('/transactions', filters.value, {
@@ -421,11 +605,14 @@ const applyFilters = () => {
     onFinish: () => loading.value = false,
   })
 }
+
 const clearFilters = () => {
   filters.value = { search: '', type: '', crypto_asset_id: '', date_range: '', start_date: '', end_date: '' }
   applyFilters()
 }
+
 const debouncedSearch = debounce(applyFilters, 500)
+
 const goToPage = (page) => {
   loading.value = true
   router.get('/transactions', { ...filters.value, page }, {
@@ -433,96 +620,120 @@ const goToPage = (page) => {
     onFinish: () => loading.value = false,
   })
 }
+
 const deleteTransaction = (id) => {
   if (confirm('Tem certeza que deseja excluir esta transação?')) {
     router.delete(`/transactions/${id}`)
   }
 }
-const exportTransactions = () => window.open(`/transactions/export?${new URLSearchParams(filters.value)}`)
 
-// Helpers (tipo, ícone, formatação)
-const getTypeLabel = type => ({
-  buy: 'Compra', sell: 'Venda', transfer: 'Transferência',
-  mining: 'Mineração', staking: 'Staking', airdrop: 'Airdrop'
-}[type] || type)
-const getTypeClass = type => ({
-  buy: 'bg-green-100 text-green-800', sell: 'bg-red-100 text-red-800',
-  transfer: 'bg-blue-100 text-blue-800', mining: 'bg-yellow-100 text-yellow-800',
-  staking: 'bg-purple-100 text-purple-800', airdrop: 'bg-indigo-100 text-indigo-800'
-}[type] || 'bg-gray-100 text-gray-800')
-const getTypeIconClass = type => ({
-  buy: 'bg-green-500', sell: 'bg-red-500',
-  transfer: 'bg-blue-500', mining: 'bg-yellow-500',
-  staking: 'bg-purple-500', airdrop: 'bg-indigo-500'
-}[type] || 'bg-gray-500')
-
-const formatQuantity = qty => new Intl.NumberFormat('pt-BR', {
-  minimumFractionDigits: 2, maximumFractionDigits: 8
-}).format(qty)
-const formatCurrency = amt => new Intl.NumberFormat('pt-BR', {
-  style: 'currency', currency: 'BRL'
-}).format(amt)
-const formatDate = value => {
-  console.log('Data recebida:', value)
-  const dt = new Date(value)
-  if (isNaN(dt.getTime())) return 'Data inválida'
-  return new Intl.DateTimeFormat('pt-BR', {
-    year: 'numeric', month: 'short', day: 'numeric',
-    hour: '2-digit', minute: '2-digit',
-  }).format(dt)
+const deleteAllTransactions = () => {
+  // Primeira confirmação, mais simples.
+  if (confirm('ATENÇÃO: Esta ação é irreversível e irá apagar TODAS as suas transações.\n\nTem certeza que deseja continuar?')) {
+    
+    // Segunda confirmação, pedindo para digitar "DELETAR TUDO"
+    const confirmText = prompt('Para confirmar, digite "DELETAR TUDO" (sem aspas):')
+    
+    if (confirmText === 'DELETAR TUDO') {
+      router.delete('/transactions/delete-all', {
+        onSuccess: () => {
+          alert('Todas as transações foram excluídas com sucesso.')
+        },
+        onError: () => {
+          alert('Ocorreu um erro ao tentar excluir as transações.')
+        }
+      })
+    } else {
+      alert('Confirmação cancelada. As transações não foram excluídas.')
+    }
+  }
 }
 
-// Log para diagnóstico
-onMounted(() => {
-  console.log('Transações recebidas:', props.transactions?.data)
-  props.transactions?.data?.forEach((tx, idx) => {
-    console.log(`#${idx}`, tx)
-    if (!tx.id) console.warn(`⚠️ Transação sem ID no índice ${idx}`)
-  })
-})
+const exportTransactions = () => {
+  window.location.href = '/transactions/export?' + new URLSearchParams(filters.value)
+}
 
-// Debounce
-function debounce(fn, wait) {
+// Helpers
+const getTypeLabel = (type) => {
+  const labels = {
+    trade: 'Spot',
+    convert: 'Convert',
+    deposit: 'Depósito',
+    withdrawal: 'Saque',
+    mining: 'Mineração',
+    staking: 'Staking',
+  }
+  return labels[type] || type
+}
+
+const getTypeClass = (type) => {
+  const classes = {
+    trade: 'bg-blue-100 text-blue-800',
+    convert: 'bg-purple-100 text-purple-800',
+    deposit: 'bg-green-100 text-green-800',
+    withdrawal: 'bg-red-100 text-red-800',
+    mining: 'bg-yellow-100 text-yellow-800',
+    staking: 'bg-indigo-100 text-indigo-800',
+  }
+  return classes[type] || 'bg-gray-100 text-gray-800'
+}
+
+const getTypeIconClass = (type) => {
+  const classes = {
+    trade: 'bg-blue-500',
+    convert: 'bg-purple-500',
+    deposit: 'bg-green-500',
+    withdrawal: 'bg-red-500',
+    mining: 'bg-yellow-500',
+    staking: 'bg-indigo-500',
+  }
+  return classes[type] || 'bg-gray-500'
+}
+
+const formatDate = (date) => {
+  return new Date(date).toLocaleDateString('pt-BR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+const formatCurrency = (value, currency = 'BRL') => {
+  const numValue = Number(value) || 0
+  
+  if (currency === 'BRL') {
+    return new Intl.NumberFormat('pt-BR', {
+      style: 'currency',
+      currency: 'BRL',
+    }).format(numValue)
+  }
+  
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+  }).format(numValue)
+}
+
+const formatQuantity = (value) => {
+  const numValue = Number(value) || 0
+  return new Intl.NumberFormat('pt-BR', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 8,
+  }).format(numValue)
+}
+
+// Debounce helper
+function debounce(func, wait) {
   let timeout
-  return (...args) => {
+  return function executedFunction(...args) {
+    const later = () => {
+      clearTimeout(timeout)
+      func(...args)
+    }
     clearTimeout(timeout)
-    timeout = setTimeout(() => fn(...args), wait)
+    timeout = setTimeout(later, wait)
   }
 }
 </script>
-
-
-<style scoped>
-.bg-primary {
-  background-color: var(--primary-color, #3b82f6);
-}
-
-.text-primary {
-  color: var(--primary-color, #3b82f6);
-}
-
-.border-primary {
-  border-color: var(--primary-color, #3b82f6);
-}
-
-.ring-primary {
-  --tw-ring-color: var(--primary-color, #3b82f6);
-}
-
-.hover\\:bg-primary-dark:hover {
-  background-color: var(--primary-dark, #2563eb);
-}
-
-.hover\\:text-primary-dark:hover {
-  color: var(--primary-dark, #2563eb);
-}
-
-.focus\\:ring-primary:focus {
-  --tw-ring-color: var(--primary-color, #3b82f6);
-}
-
-.focus\\:border-primary:focus {
-  border-color: var(--primary-color, #3b82f6);
-}
-</style>
-

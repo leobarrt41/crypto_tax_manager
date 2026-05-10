@@ -1,0 +1,153 @@
+ private function generateSnapshotsFromCryptoAssets(): void
+    {
+        Log::info("======================================================================");
+        Log::info("🔍 [Descoberta] Iniciando varredura inteligente...");
+        Log::info("======================================================================");
+        
+        // Passo 1: Buscar TODOS os ativos da tabela crypto_assets
+        $allAssets = CryptoAsset::pluck('symbol')->filter()->unique()->values()->toArray();
+        
+        if (empty($allAssets)) {
+            Log::warning("⚠️ A tabela crypto_assets está vazia. Execute a Fase 0 primeiro.");
+            return;
+        }
+        
+        Log::info("✅ Total de ativos na base: " . count($allAssets));
+        
+        if (count($allAssets) <= 20) {
+            Log::info("📋 Ativos: " . implode(', ', $allAssets));
+        } else {
+            Log::info("📋 Primeiros 20 ativos: " . implode(', ', array_slice($allAssets, 0, 20)) . '...');
+        }
+        
+        Log::info("======================================================================");
+        Log::info("🎯 [OTIMIZAÇÃO 1] Buscando conversões (Convert) por intervalo de datas...");
+        Log::info("======================================================================");
+        
+        // Passo 2A: Buscar TODAS as conversões dos últimos 5 anos (por mês)
+        $monthlyAssets = []; // ['2023-10' => ['BTC', 'ETH'], ...]
+        $this->discoverConversionsByInterval($monthlyAssets);
+        
+        Log::info("======================================================================");
+        Log::info("🎯 [OTIMIZAÇÃO 2] Buscando trades spot apenas em pares com moedas quote obrigatórias...");
+        Log::info("📋 Moedas quote: USDT, BRL, BUSD, FDUSD, BTC, ETH, BNB");
+        Log::info("======================================================================");
+        
+        // Passo 2B: Para cada ativo, buscar histórico de trades spot
+        $processedAssets = 0;
+        $totalAssets = count($allAssets);
+        
+        foreach ($allAssets as $asset) {
+            $processedAssets++;
+            $progress = round(($processedAssets / $totalAssets) * 100);
+            
+            Log::info("🔍 [{$processedAssets}/{$totalAssets}] ({$progress}%) Processando {$asset}...");
+            
+            // OTIMIZAÇÃO: Passa a lista de ativos negociados para filtrar pares
+            $pairs = $this->buildPairsForAsset($asset, $allAssets);
+            
+            // Log detalhado para os primeiros 5 ativos ou ativos importantes
+            if ($processedAssets <= 5 || in_array($asset, ['BTC', 'ETH', 'XRP', 'BNB'])) {
+                Log::info("   📋 {$asset}: " . count($pairs) . " pares para testar");
+                if (count($pairs) <= 10) {
+                    Log::info("   📋 Pares: " . implode(', ', $pairs));
+                } else {
+                    Log::info("   📋 Primeiros 10 pares: " . implode(', ', array_slice($pairs, 0, 10)) . '...');
+                }
+            }
+            
+            $assetFoundInAnyPair = false;
+            $pairsTested = 0;
+            $pairsWithErrors = 0;
+            
+            foreach ($pairs as $pair) {
+                $pairsTested++;
+                
+                try {
+                    // OTIMIZAÇÃO: Verificação rápida - verifica SE EXISTE algum trade antes de buscar histórico completo
+                    $hasAnyTrade = $this->quickCheckPairHasTrades($pair);
+                    
+                    if (!$hasAnyTrade) {
+                        // Não há trades neste par, pular para economizar 60 requisições
+                        continue;
+                    }
+                    
+                    // Se chegou aqui, o par TEM trades - buscar histórico completo
+                    $startTime = Carbon::now()->subYears(5)->getTimestampMs();
+                    $endTime = Carbon::now()->getTimestampMs();
+                    
+                    $trades = $this->fetchMyTrades($pair, $startTime, $endTime);
+                    
+                    if (!empty($trades)) {
+                        $assetFoundInAnyPair = true;
+                        Log::info("   ✅ {$pair}: " . count($trades) . " trades encontrados");
+                        
+                        // Para cada trade, adicionar o ativo ao snapshot do mês correspondente
+                        foreach ($trades as $trade) {
+                            $date = Carbon::createFromTimestampMs($trade['time']);
+                            $monthKey = $date->format('Y-m');
+                            
+                            if (!isset($monthlyAssets[$monthKey])) {
+                                $monthlyAssets[$monthKey] = [];
+                            }
+                            
+                            if (!in_array($asset, $monthlyAssets[$monthKey])) {
+                                $monthlyAssets[$monthKey][] = $asset;
+                            }
+                        }
+                    }
+                    
+                } catch (Exception $e) {
+                    $pairsWithErrors++;
+                    // Log detalhado para os primeiros ativos
+                    if ($processedAssets <= 5 || in_array($asset, ['BTC', 'ETH', 'XRP', 'BNB'])) {
+                        Log::debug("   ⚠️ {$pair}: Erro - " . $e->getMessage());
+                    }
+                }
+                
+                // Pausa para respeitar rate limit da Binance
+                usleep(50000); // 50ms = 20 req/segundo
+            }
+            
+            // Log resumo para ativos importantes
+            if ($processedAssets <= 5 || in_array($asset, ['BTC', 'ETH', 'XRP', 'BNB'])) {
+                Log::info("   📊 {$asset}: {$pairsTested} pares testados, {$pairsWithErrors} com erro");
+            }
+            
+            if (!$assetFoundInAnyPair) {
+                Log::info("   ⚠️ {$asset}: Nenhum trade encontrado em nenhum par");
+            }
+        }
+        
+        // Passo 3: Salvar os snapshots mensais
+        Log::info("======================================================================");
+        Log::info("💾 Salvando snapshots mensais no banco de dados...");
+        
+        if (empty($monthlyAssets)) {
+            Log::warning("⚠️ Nenhum mês com transações foi encontrado. Verifique se há dados na conta.");
+            return;
+        }
+        
+        foreach ($monthlyAssets as $monthKey => $assets) {
+            [$year, $month] = explode('-', $monthKey);
+            
+            MonthlyAssetSnapshot::updateOrCreate(
+                [
+                    'user_id' => $this->user->id,
+                    'exchange_id' => $this->apiKey->exchange_id,
+                    'year' => (int)$year,
+                    'month' => (int)$month
+                ],
+                [
+                    'assets' => $assets
+                ]
+            );
+            
+            Log::info("✅ {$monthKey}: " . count($assets) . " ativos (" . implode(', ', $assets) . ")");
+        }
+        
+        Log::info("======================================================================");
+        Log::info("🎉 [Descoberta] Concluída com sucesso!");
+        Log::info("📊 Total de meses mapeados: " . count($monthlyAssets));
+        Log::info("======================================================================");
+    }

@@ -75,5 +75,23 @@ class Transaction extends Model
     {
         return $this->belongsTo(BotOrder::class);
     }
+
+
+    public function getPriceInBRLAttribute()
+{
+    $price = $this->cryptoAsset->prices()
+        ->whereDate('retrieved_at', '<=', $this->date)
+        ->orderByDesc('retrieved_at')
+        ->first();
+
+    return $price ? $price->price_in_brl : null;
+}
+
+public function getTotalInBRLAttribute()
+{
+    return $this->price_in_brl ? $this->price_in_brl * $this->amount : null;
+}
+
+
 }
 
