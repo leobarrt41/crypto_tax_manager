@@ -45,10 +45,11 @@
           
         <StatCard
             title="Status IN 1888"
-            :value="stats.in1888_status?.message || 'Carregando...'"
+            :value="stats.in1888_status?.message || 'Mês atual sem dados'"
+            format="text"
             icon="document"
             :color="getComplianceColor(stats.in1888_status?.status)"
-            :subtitle="stats.in1888_status?.description || ''"
+            :subtitle="`Referente ao mês atual. ${stats.in1888_status?.description || 'Sem movimentações importadas para o mês atual.'}`"
           />
 
 

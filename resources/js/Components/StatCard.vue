@@ -67,7 +67,7 @@ const props = defineProps({
   },
   format: {
     type: String,
-    default: 'number' // 'number', 'currency', 'percentage'
+    default: 'number' // 'number', 'currency', 'percentage', 'text'
   }
 })
 
@@ -83,15 +83,25 @@ const iconComponent = computed(() => {
 })
 
 const formattedValue = computed(() => {
+  if (props.format === 'text') {
+    return String(props.value ?? '-')
+  }
+
+  const numericValue = Number(props.value)
+
+  if (!Number.isFinite(numericValue)) {
+    return props.format === 'percentage' ? '0%' : '0'
+  }
+
   if (props.format === 'currency') {
     return new Intl.NumberFormat('pt-BR', {
       style: 'currency',
       currency: 'BRL'
-    }).format(props.value)
+    }).format(numericValue)
   } else if (props.format === 'percentage') {
-    return `${props.value}%`
+    return `${numericValue}%`
   } else {
-    return new Intl.NumberFormat('pt-BR').format(props.value)
+    return new Intl.NumberFormat('pt-BR').format(numericValue)
   }
 })
 
