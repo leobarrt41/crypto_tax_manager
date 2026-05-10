@@ -233,7 +233,7 @@ async function loadSummary() {
     const params = new URLSearchParams({ year: filters.year })
     if (filters.month) params.append('month', filters.month)
 
-    const res  = await fetch(`/api/tax-reports/relatorio-ir/summary?${params}`, {
+    const res  = await fetch(`/reports/relatorio-ir/summary?${params}`, {
       headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
       credentials: 'same-origin',
     })
@@ -254,7 +254,7 @@ async function recalcularFifo() {
   loadingRecalc.value = true
 
   try {
-    const res  = await fetch('/api/tax-reports/relatorio-ir/recalculate', {
+    const res  = await fetch('/reports/relatorio-ir/recalculate', {
       method:  'POST',
       headers: {
         'Accept':           'application/json',
@@ -288,7 +288,7 @@ function exportarCsv() {
   const params = new URLSearchParams({ year: filters.year })
   if (filters.month) params.append('month', filters.month)
 
-  window.location.href = `/api/tax-reports/relatorio-ir/export-csv?${params}`
+  window.location.href = `/reports/relatorio-ir/export-csv?${params}`
 }
 
 function getCsrfToken() {

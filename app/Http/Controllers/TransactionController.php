@@ -537,8 +537,12 @@ private function mapBinanceRowToTransactionData(array $data, string $sourceModel
             $totalUsdtAnnual = $toAmount;
         }
 
-        // Preço unitário em moeda "from" por unidade de "to"
-        $priceAnnual = $toAmount > 0 ? ($fromAmount / $toAmount) : 0.0;
+        $priceAnnual = $this->deriveAnnualUnitPrice(
+            $fromAsset,
+            $toAsset,
+            $fromAmount,
+            $toAmount
+        );
 
         return [
             'user_id' => auth()->id(),
@@ -634,6 +638,30 @@ private function mapBinanceRowToTransactionData(array $data, string $sourceModel
         'reference' => $normalized['order_no'] ?? $normalized['id'] ?? null,
         'date' => $this->parseBinanceDateValue($dateRaw),
     ];
+}
+
+private function deriveAnnualUnitPrice(string $fromAsset, string $toAsset, float $fromAmount, float $toAmount): float
+{
+    if ($fromAmount <= 0 || $toAmount <= 0) {
+        return 0.0;
+    }
+
+    $stableOrFiat = ['USDT', 'USDC', 'BUSD', 'TUSD', 'FDUSD', 'BRL', 'USD', 'EUR'];
+    $fromIsStable = in_array($fromAsset, $stableOrFiat, true);
+    $toIsStable = in_array($toAsset, $stableOrFiat, true);
+
+    // Compra de cripto com stable/fiat: preço = quanto pagou / quantidade recebida
+    if ($fromIsStable && !$toIsStable) {
+        return $fromAmount / $toAmount;
+    }
+
+    // Venda de cripto para stable/fiat: preço = quanto recebeu / quantidade vendida
+    if (!$fromIsStable && $toIsStable) {
+        return $toAmount / $fromAmount;
+    }
+
+    // Cripto-cripto: fallback simétrico atual
+    return $fromAmount / $toAmount;
 }
 
 private function parseAmountAssetCell(string $value): array

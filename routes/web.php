@@ -181,6 +181,9 @@ Route::middleware(['auth', 'verified'])->group(function () {
         
         // ── Relatórios IR (FIFO / Ganhos de Capital) ──
         Route::get('/relatorio-ir', [TaxReportController::class, 'index'])->name('relatorio-ir');
+        Route::get('/relatorio-ir/summary', [TaxReportController::class, 'monthlySummary'])->name('relatorio-ir.summary');
+        Route::post('/relatorio-ir/recalculate', [TaxReportController::class, 'recalculateFifo'])->name('relatorio-ir.recalculate');
+        Route::get('/relatorio-ir/export-csv', [TaxReportController::class, 'exportCsv'])->name('relatorio-ir.export-csv');
 
         // Exportações
         Route::post('/export/in1888', [ReportController::class, 'exportIn1888'])->name('export.in1888');
