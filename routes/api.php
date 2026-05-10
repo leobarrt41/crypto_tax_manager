@@ -7,6 +7,7 @@ use App\Http\Controllers\TradingBotController;
 use App\Http\Controllers\TransactionController;
 use App\Http\Controllers\CryptoAssetController;
 use App\Http\Controllers\ExchangeKeyController;
+use App\Http\Controllers\TaxReportController;
 
 /*
 |--------------------------------------------------------------------------
@@ -180,6 +181,11 @@ Route::middleware(['auth:sanctum'])->prefix('tax-reports')->group(function () {
     // Compliance Check
     Route::get('/compliance-status', [TransactionController::class, 'getComplianceStatus']);
     Route::get('/missing-data', [TransactionController::class, 'getMissingData']);
+
+    // ── FIFO / Relatórios IR ──
+    Route::get('/relatorio-ir/summary', [TaxReportController::class, 'monthlySummary']);
+    Route::post('/relatorio-ir/recalculate', [TaxReportController::class, 'recalculateFifo']);
+    Route::get('/relatorio-ir/export-csv', [TaxReportController::class, 'exportCsv']);
 });
 
 /*

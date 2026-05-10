@@ -11,6 +11,7 @@ use App\Http\Controllers\TradingStrategyController;
 use App\Http\Controllers\BotOrderController;
 use App\Http\Controllers\TradingLogController;
 use App\Http\Controllers\ReportController;
+use App\Http\Controllers\TaxReportController;
 use App\Http\Controllers\PortfolioController;
 use App\Http\Controllers\NotificationController;
 use App\Http\Controllers\TradingBotController;
@@ -178,6 +179,9 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::get('/transactions', [ReportController::class, 'transactionReport'])->name('transactions');
         Route::get('/performance', [ReportController::class, 'performanceReport'])->name('performance');
         
+        // ── Relatórios IR (FIFO / Ganhos de Capital) ──
+        Route::get('/relatorio-ir', [TaxReportController::class, 'index'])->name('relatorio-ir');
+
         // Exportações
         Route::post('/export/in1888', [ReportController::class, 'exportIn1888'])->name('export.in1888');
         Route::post('/export/tax/{format}', [ReportController::class, 'exportTax'])->name('export.tax');

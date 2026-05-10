@@ -3,37 +3,185 @@
 namespace App\Services;
 
 use App\Models\Transaction;
-use Illuminate\Support\Facades\Log;
+use App\Models\TaxMonthlySummary;
+use App\Models\User;
 use Illuminate\Support\Facades\DB;
-use Carbon\Carbon;
+use Illuminate\Support\Facades\Log;
 
+/**
+ * FifoCalculatorService
+ *
+ * Apura ganhos/perdas de capital pelo método FIFO para fins fiscais brasileiros.
+ *
+ * Regras implementadas:
+ *  - buy / deposit / receive  => ENTRADA (acumula lote de custo)
+ *  - sell / withdrawal / send => SAÍDA tributável (consome lotes FIFO)
+ *  - trade / convert          => SAÍDA do from_asset + ENTRADA do to_asset
+ *
+ * Idempotência: zera os campos fiscais antes de recalcular, garantindo
+ * que múltiplas execuções produzam o mesmo resultado.
+ *
+ * Nota: o método calculateFor() legado é mantido para compatibilidade.
+ */
 class FifoCalculatorService
 {
+    // Tipos que representam ENTRADA de ativo
+    private const ENTRADA_TYPES = ['buy', 'deposit', 'receive', 'earn', 'reward', 'airdrop'];
+
+    // Tipos que representam SAÍDA tributável
+    private const SAIDA_TYPES = ['sell', 'withdrawal', 'withdraw', 'send', 'fee'];
+
+    // Tipos que representam CONVERSÃO (saída + entrada)
+    private const CONVERT_TYPES = ['trade', 'convert', 'swap'];
+
+    // ─── API pública ─────────────────────────────────────────────────────────────
+
     /**
-     * Calcula lucro/prejuízo usando FIFO para uma transação de venda
+     * Recalcula o FIFO para um usuário específico (ou todos os usuários).
+     *
+     * @param  int|null  $userId  null = todos os usuários
+     * @return array  Estatísticas do processamento
+     */
+    public function recalculate(?int $userId = null): array
+    {
+        $stats = [
+            'users_processed'   => 0,
+            'transactions_read' => 0,
+            'saidas_processed'  => 0,
+            'errors'            => [],
+        ];
+
+        $query = User::query();
+        if ($userId !== null) {
+            $query->where('id', $userId);
+        }
+
+        $users = $query->get();
+
+        foreach ($users as $user) {
+            try {
+                $result = $this->recalculateForUser($user->id);
+                $stats['users_processed']++;
+                $stats['transactions_read'] += $result['transactions_read'];
+                $stats['saidas_processed']  += $result['saidas_processed'];
+            } catch (\Throwable $e) {
+                $msg = "Erro ao processar user_id={$user->id}: {$e->getMessage()}";
+                Log::error($msg, ['trace' => $e->getTraceAsString()]);
+                $stats['errors'][] = $msg;
+            }
+        }
+
+        return $stats;
+    }
+
+    /**
+     * Recalcula FIFO para um único usuário dentro de uma transação DB.
+     */
+    public function recalculateForUser(int $userId): array
+    {
+        return DB::transaction(function () use ($userId) {
+
+            // ── 1. Zerar campos fiscais (idempotência) ──────────────────────────
+            Transaction::where('user_id', $userId)
+                ->update([
+                    'cost_basis_brl'  => null,
+                    'profit_loss_brl' => null,
+                    'fifo_lots'       => null,
+                    'fifo_processed'  => false,
+                ]);
+
+            // ── 2. Zerar resumos mensais existentes ─────────────────────────────
+            TaxMonthlySummary::where('user_id', $userId)->delete();
+
+            // ── 3. Buscar todas as transações em ordem cronológica ───────────────
+            $transactions = Transaction::where('user_id', $userId)
+                ->orderBy('date')
+                ->orderBy('id')
+                ->get();
+
+            $stats = [
+                'transactions_read' => $transactions->count(),
+                'saidas_processed'  => 0,
+            ];
+
+            // ── 4. Estrutura de lotes FIFO por ativo ────────────────────────────
+            // $lots[$symbol] = [ ['qty' => float, 'cost_brl' => float, 'date' => string], ... ]
+            $lots = [];
+
+            // ── 5. Acumulador mensal ─────────────────────────────────────────────
+            // $monthly[$year][$month] = ['alienacoes'=>0, 'lucro'=>0, 'prejuizo'=>0, 'qtd'=>0]
+            $monthly = [];
+
+            // ── 6. Processar cada transação ──────────────────────────────────────
+            foreach ($transactions as $tx) {
+                $type = strtolower(trim($tx->type ?? ''));
+
+                if (in_array($type, self::ENTRADA_TYPES)) {
+                    $this->processEntrada($lots, $tx);
+
+                } elseif (in_array($type, self::SAIDA_TYPES)) {
+                    $result = $this->processSaida($lots, $tx);
+                    $this->updateMonthly($monthly, $tx, $result);
+                    $stats['saidas_processed']++;
+
+                } elseif (in_array($type, self::CONVERT_TYPES)) {
+                    // Saída do from_asset
+                    if ($tx->from_asset && $tx->from_amount > 0) {
+                        $result = $this->processSaidaAsset(
+                            $lots,
+                            $tx,
+                            $tx->from_asset,
+                            (float) $tx->from_amount,
+                            (float) ($tx->total_brl ?? 0)
+                        );
+                        $this->updateMonthly($monthly, $tx, $result);
+                        $stats['saidas_processed']++;
+                    }
+                    // Entrada do to_asset
+                    if ($tx->to_asset && $tx->to_amount > 0) {
+                        $this->processEntradaAsset(
+                            $lots,
+                            $tx->to_asset,
+                            (float) $tx->to_amount,
+                            (float) ($tx->total_brl ?? 0),
+                            $tx->date
+                        );
+                    }
+                }
+                // Tipos desconhecidos são ignorados silenciosamente
+            }
+
+            // ── 7. Persistir resumos mensais ─────────────────────────────────────
+            $this->persistMonthly($userId, $monthly);
+
+            return $stats;
+        });
+    }
+
+    // ─── Compatibilidade legada ──────────────────────────────────────────────────
+
+    /**
+     * @deprecated Use recalculateForUser() para processamento em lote.
+     * Mantido para compatibilidade com código existente.
      */
     public function calculateFor(Transaction $sale)
     {
         if (!in_array($sale->operation, ['saida']) || !$sale->to_asset || !$sale->to_amount) {
-            return null; // Apenas transações de saída com ativos e quantidade
+            return null;
         }
 
-        $userId = $sale->user_id;
-        $asset = $sale->to_asset;
-        $amountToMatch = $sale->to_amount;
-        $dateLimit = $sale->date;
-
-        $remaining = $amountToMatch;
+        $userId    = $sale->user_id;
+        $asset     = $sale->to_asset;
+        $remaining = (float) $sale->to_amount;
         $totalCost = 0;
 
         DB::beginTransaction();
 
         try {
-            // Seleciona entradas anteriores com saldo
             $buys = Transaction::where('user_id', $userId)
                 ->where('to_asset', $asset)
                 ->where('operation', 'entrada')
-                ->where('date', '<=', $dateLimit)
+                ->where('date', '<=', $sale->date)
                 ->where('remaining_quantity', '>', 0)
                 ->orderBy('date')
                 ->lockForUpdate()
@@ -41,21 +189,17 @@ class FifoCalculatorService
 
             foreach ($buys as $buy) {
                 $available = $buy->remaining_quantity;
-
                 if ($available <= 0) {
                     continue;
                 }
-
-                $used = min($remaining, $available);
-                $unitCost = $buy->price ?? 0;
+                $used       = min($remaining, $available);
+                $unitCost   = $buy->price ?? 0;
                 $totalCost += $unitCost * $used;
 
-                // Atualiza quantidade restante no lote original
                 $buy->remaining_quantity -= $used;
                 $buy->save();
 
                 $remaining -= $used;
-
                 if ($remaining <= 0) {
                     break;
                 }
@@ -65,9 +209,8 @@ class FifoCalculatorService
                 Log::warning("Transação {$sale->id} possui quantidade superior ao disponível em FIFO.");
             }
 
-            $saleValue = $sale->total_brl ?? 0;
-            $profit = $saleValue - $totalCost;
-
+            $saleValue        = $sale->total_brl ?? 0;
+            $profit           = $saleValue - $totalCost;
             $sale->profit_loss = $profit;
             $sale->save();
 
@@ -78,6 +221,158 @@ class FifoCalculatorService
             DB::rollBack();
             Log::error("Erro no cálculo FIFO: " . $e->getMessage());
             return null;
+        }
+    }
+
+    // ─── Métodos privados ────────────────────────────────────────────────────────
+
+    private function processEntrada(array &$lots, Transaction $tx): void
+    {
+        $asset   = $tx->to_asset ?? $tx->from_asset;
+        $qty     = (float) ($tx->to_amount ?? $tx->from_amount ?? 0);
+        $costBrl = (float) ($tx->total_brl ?? 0);
+
+        if (!$asset || $qty <= 0) {
+            return;
+        }
+
+        $this->processEntradaAsset($lots, $asset, $qty, $costBrl, $tx->date);
+    }
+
+    private function processEntradaAsset(
+        array &$lots,
+        string $asset,
+        float $qty,
+        float $costBrl,
+        $date
+    ): void {
+        if (!isset($lots[$asset])) {
+            $lots[$asset] = [];
+        }
+
+        $lots[$asset][] = [
+            'qty'      => $qty,
+            'cost_brl' => $costBrl,
+            'date'     => $date instanceof \Carbon\Carbon ? $date->toDateTimeString() : (string) $date,
+        ];
+    }
+
+    private function processSaida(array &$lots, Transaction $tx): array
+    {
+        $asset    = $tx->from_asset ?? $tx->to_asset;
+        $qty      = (float) ($tx->from_amount ?? $tx->to_amount ?? 0);
+        $totalBrl = (float) ($tx->total_brl ?? 0);
+
+        if (!$asset || $qty <= 0) {
+            return ['cost_basis_brl' => 0, 'profit_loss_brl' => 0, 'fifo_lots' => []];
+        }
+
+        return $this->processSaidaAsset($lots, $tx, $asset, $qty, $totalBrl);
+    }
+
+    private function processSaidaAsset(
+        array &$lots,
+        Transaction $tx,
+        string $asset,
+        float $qty,
+        float $totalBrl
+    ): array {
+        $consumedLots = [];
+        $costBasisBrl = 0.0;
+        $remaining    = $qty;
+
+        if (isset($lots[$asset])) {
+            foreach ($lots[$asset] as $i => &$lot) {
+                if ($remaining <= 0) {
+                    break;
+                }
+
+                $consume      = min($lot['qty'], $remaining);
+                $lotCostUnit  = $lot['qty'] > 0 ? ($lot['cost_brl'] / $lot['qty']) : 0;
+                $consumedCost = $consume * $lotCostUnit;
+
+                $consumedLots[] = [
+                    'lot_date'     => $lot['date'],
+                    'lot_qty'      => round($consume, 10),
+                    'lot_cost_brl' => round($consumedCost, 10),
+                ];
+
+                $costBasisBrl    += $consumedCost;
+                $lot['qty']      -= $consume;
+                $lot['cost_brl'] -= $consumedCost;
+                $remaining       -= $consume;
+
+                if ($lot['qty'] <= 1e-10) {
+                    unset($lots[$asset][$i]);
+                }
+            }
+            unset($lot);
+            $lots[$asset] = array_values($lots[$asset]);
+        }
+
+        $profitLossBrl = $totalBrl - $costBasisBrl;
+
+        $tx->cost_basis_brl  = round($costBasisBrl, 10);
+        $tx->profit_loss_brl = round($profitLossBrl, 10);
+        $tx->fifo_lots       = json_encode($consumedLots);
+        $tx->fifo_processed  = true;
+        $tx->saveQuietly();
+
+        return [
+            'cost_basis_brl'  => $costBasisBrl,
+            'profit_loss_brl' => $profitLossBrl,
+            'fifo_lots'       => $consumedLots,
+        ];
+    }
+
+    private function updateMonthly(array &$monthly, Transaction $tx, array $result): void
+    {
+        $date  = $tx->date instanceof \Carbon\Carbon ? $tx->date : \Carbon\Carbon::parse($tx->date);
+        $year  = (int) $date->format('Y');
+        $month = (int) $date->format('n');
+
+        if (!isset($monthly[$year][$month])) {
+            $monthly[$year][$month] = [
+                'alienacoes' => 0.0,
+                'lucro'      => 0.0,
+                'prejuizo'   => 0.0,
+                'qtd'        => 0,
+            ];
+        }
+
+        $totalBrl   = (float) ($tx->total_brl ?? 0);
+        $profitLoss = (float) $result['profit_loss_brl'];
+
+        $monthly[$year][$month]['alienacoes'] += $totalBrl;
+        $monthly[$year][$month]['qtd']++;
+
+        if ($profitLoss >= 0) {
+            $monthly[$year][$month]['lucro'] += $profitLoss;
+        } else {
+            $monthly[$year][$month]['prejuizo'] += abs($profitLoss);
+        }
+    }
+
+    private function persistMonthly(int $userId, array $monthly): void
+    {
+        $now = now();
+
+        foreach ($monthly as $year => $months) {
+            foreach ($months as $month => $data) {
+                $resultado = $data['lucro'] - $data['prejuizo'];
+
+                TaxMonthlySummary::updateOrCreate(
+                    ['user_id' => $userId, 'year' => $year, 'month' => $month],
+                    [
+                        'total_alienacoes_brl'   => round($data['alienacoes'], 2),
+                        'lucro_realizado_brl'     => round($data['lucro'], 2),
+                        'prejuizo_realizado_brl'  => round($data['prejuizo'], 2),
+                        'resultado_liquido_brl'   => round($resultado, 2),
+                        'qtd_operacoes'           => $data['qtd'],
+                        'calculated_at'           => $now,
+                    ]
+                );
+            }
         }
     }
 }
