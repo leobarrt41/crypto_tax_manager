@@ -65,9 +65,9 @@
                   {{ in1888Description }}
                 </dt>
                 <dt class="mt-2">
-                  <a href="/reports/in1888" class="text-xs text-blue-600 hover:underline">
+                  <Link :href="route('tax-reports.in1888')" class="text-xs text-blue-600 hover:underline">
                     Ver status anual mês a mês →
-                  </a>
+                  </Link>
                 </dt>
               </dl>
             </div>

@@ -12,6 +12,7 @@ use App\Http\Controllers\BotOrderController;
 use App\Http\Controllers\TradingLogController;
 use App\Http\Controllers\ReportController;
 use App\Http\Controllers\TaxReportController;
+use App\Http\Controllers\In1888StatusController;
 use App\Http\Controllers\PortfolioController;
 use App\Http\Controllers\NotificationController;
 use App\Http\Controllers\TradingBotController;
@@ -185,11 +186,28 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::post('/relatorio-ir/recalculate', [TaxReportController::class, 'recalculateFifo'])->name('relatorio-ir.recalculate');
         Route::get('/relatorio-ir/export-csv', [TaxReportController::class, 'exportCsv'])->name('relatorio-ir.export-csv');
 
+        // ── IN 1888 (status mensal/anual) via sessão web ──
+        Route::prefix('in1888-status')->name('in1888-status.')->group(function () {
+            Route::get('/current', [In1888StatusController::class, 'current'])->name('current');
+            Route::get('/annual', [In1888StatusController::class, 'annual'])->name('annual');
+            Route::get('/monthly', [In1888StatusController::class, 'monthly'])->name('monthly');
+            Route::get('/export-csv', [In1888StatusController::class, 'exportCsv'])->name('export-csv');
+        });
+
         // Exportações
         Route::post('/export/in1888', [ReportController::class, 'exportIn1888'])->name('export.in1888');
         Route::post('/export/tax/{format}', [ReportController::class, 'exportTax'])->name('export.tax');
         Route::post('/export/portfolio/{format}', [ReportController::class, 'exportPortfolio'])->name('export.portfolio');
         Route::post('/export/transactions/{format}', [ReportController::class, 'exportTransactions'])->name('export.transactions');
+    });
+
+    // ===== ALIAS DE URL PARA RELATÓRIOS FISCAIS =====
+    Route::prefix('tax-reports')->name('tax-reports.')->group(function () {
+        Route::get('/in1888', [ReportController::class, 'in1888'])->name('in1888');
+        Route::get('/in1888-status/current', [In1888StatusController::class, 'current'])->name('in1888-status.current');
+        Route::get('/in1888-status/annual', [In1888StatusController::class, 'annual'])->name('in1888-status.annual');
+        Route::get('/in1888-status/monthly', [In1888StatusController::class, 'monthly'])->name('in1888-status.monthly');
+        Route::get('/in1888-status/export-csv', [In1888StatusController::class, 'exportCsv'])->name('in1888-status.export-csv');
     });
 
     // ===== REGRAS FISCAIS =====

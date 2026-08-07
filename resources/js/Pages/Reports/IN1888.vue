@@ -201,20 +201,22 @@
               />
               <StatCard
                 title="Volume Total"
-                :value="formatCurrency(monthStats.total_volume)"
+                :value="monthStats.total_volume"
+                format="currency"
                 icon="currency-dollar"
                 color="green"
               />
               <StatCard
                 title="Obrigatoriedade"
                 :value="monthStats.is_required ? 'Obrigatória' : 'Não Obrigatória'"
-                :change="monthStats.is_required ? 'required' : 'optional'"
+                format="text"
                 icon="shield-check"
                 color="purple"
               />
               <StatCard
                 title="Status"
                 :value="monthStats.status"
+                format="text"
                 icon="check-circle"
                 color="yellow"
               />
@@ -374,16 +376,19 @@
                 </p>
               </div>
               <div class="flex items-center gap-3">
-                <select
-                  v-model="annualYear"
-                  @change="loadAnnualStatus"
-                  class="text-sm border-gray-300 rounded-md shadow-sm focus:ring-green-500 focus:border-green-500"
+                <button
+                  @click="loadAnnualStatus"
+                  :disabled="annualLoading || !selectedYearForStatus"
+                  class="inline-flex items-center px-3 py-1.5 border border-blue-600 shadow-sm text-sm font-medium rounded-md text-blue-700 bg-white hover:bg-blue-50 disabled:opacity-50"
                 >
-                  <option v-for="y in availableYearsForStatus" :key="y" :value="y">{{ y }}</option>
-                </select>
+                  <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                  </svg>
+                  Calcular obrigatoriedade
+                </button>
                 <button
                   @click="exportAnnualCsv"
-                  :disabled="annualLoading || !annualData.months.length"
+                  :disabled="annualLoading || !annualData.months.length || !selectedYearForStatus"
                   class="inline-flex items-center px-3 py-1.5 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
                 >
                   <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -417,7 +422,7 @@
               </div>
 
               <div v-else-if="!annualData.months.length" class="text-center py-8 text-gray-400">
-                Nenhum dado encontrado para {{ annualYear }}.
+                Nenhum dado encontrado para {{ selectedYearForStatus }}.
               </div>
 
               <table v-else class="min-w-full divide-y divide-gray-200">
@@ -469,20 +474,17 @@ const props = defineProps({
 
 // ── Status anual de obrigatoriedade ────────────────────────────────────────
 const currentYear = new Date().getFullYear()
-const availableYearsForStatus = computed(() => {
-  const years = []
-  for (let y = currentYear; y >= 2019; y--) years.push(y)
-  return years
-})
-
-const annualYear  = ref(currentYear)
 const annualLoading = ref(false)
 const annualData  = ref({ year: currentYear, months: [], summary: null })
+const selectedYearForStatus = computed(() => Number(form.value.year) || currentYear)
 
 const loadAnnualStatus = async () => {
+  const yearToLoad = selectedYearForStatus.value
+  if (!yearToLoad) return
+
   annualLoading.value = true
   try {
-    const res  = await fetch(`/api/tax-reports/in1888-status/annual?year=${annualYear.value}`, {
+    const res  = await fetch(`/tax-reports/in1888-status/annual?year=${yearToLoad}`, {
       headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }
     })
     const data = await res.json()
@@ -495,7 +497,7 @@ const loadAnnualStatus = async () => {
 }
 
 const exportAnnualCsv = () => {
-  window.location.href = `/api/tax-reports/in1888-status/export-csv?year=${annualYear.value}`
+  window.location.href = `/tax-reports/in1888-status/export-csv?year=${selectedYearForStatus.value}`
 }
 
 const annualStatusBadge = (status) => {
@@ -507,9 +509,6 @@ const annualStatusBadge = (status) => {
   return map[status] ?? 'bg-gray-100 text-gray-600'
 }
 
-// Carrega ao montar
-loadAnnualStatus()
-
 const loading = ref(false)
 const months = [
   'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
@@ -518,7 +517,7 @@ const months = [
 
 const form = ref({
   month: '',
-  year: '',
+  year: String(currentYear),
   declarant_cpf: props.declarantInfo?.cpf || '',
   declarant_name: props.declarantInfo?.name || '',
   file_type: 'original',
@@ -592,16 +591,32 @@ const previewFile = () => {
 watch([() => form.value.year, () => form.value.month], async ([newYear, newMonth]) => {
   if (newYear && newMonth) {
     try {
-      const response = await fetch(route('reports.month-stats', { 
-        year: newYear, 
-        month: newMonth 
-      }))
+      const response = await fetch(`/tax-reports/in1888-status/monthly?year=${newYear}&month=${newMonth}`, {
+        headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }
+      })
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`)
+      }
+
       const data = await response.json()
-      monthStats.value = data
+      monthStats.value = {
+        ...monthStats.value,
+        total_operations: data.transactions_count ?? 0,
+        total_volume: data.volume_brl ?? 0,
+        is_required: data.status === 'required',
+        status: data.status_label ?? 'Sem dados',
+      }
     } catch (error) {
       console.error('Erro ao carregar estatísticas:', error)
+      monthStats.value = {
+        ...monthStats.value,
+        total_operations: 0,
+        total_volume: 0,
+        is_required: false,
+        status: 'Erro ao carregar',
+      }
     }
   }
 })
 </script>
-
