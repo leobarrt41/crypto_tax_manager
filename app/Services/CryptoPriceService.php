@@ -266,15 +266,75 @@ class CryptoPriceService
     }
 
     /**
-     * Busca o preço de fechamento diário de um ativo na Binance (par USDT).
-     * Retorna o preço em USD ou null se o par não existir / estiver deslistado.
+     * Busca o preço de fechamento diário de um ativo na Binance.
+     *
+     * Estratégia de pares (em ordem de preferência):
+     *  1. {SYMBOL}USDT  — par principal (stablecoin USD)
+     *  2. {SYMBOL}BUSD  — par alternativo (stablecoin USD, comum até 2023)
+     *  3. {SYMBOL}BRL   — par direto em BRL (retorna preço em BRL, não USD)
+     *  4. {SYMBOL}BTC   — par em BTC; converte via preço BTC/USDT do mesmo dia
+     *
+     * A Binance mantém dados históricos de klines mesmo para pares deslistados
+     * (ex: LUNAUSDT, FTTUSDT), portanto esta estratégia cobre a maioria dos casos
+     * sem necessidade de APIs externas pagas.
+     *
+     * @return float|null  Preço em USD (ou null se todos os pares falharem)
      */
     private function getBinanceHistoricalPrice(string $symbol, Carbon $date): ?float
     {
-        $pair = "{$symbol}USDT";
+        // Pares USD-equivalentes: retornam preço diretamente em USD
+        $usdPairs = ["{$symbol}USDT", "{$symbol}BUSD", "{$symbol}FDUSD", "{$symbol}USDC"];
 
+        foreach ($usdPairs as $pair) {
+            $price = $this->fetchBinanceKlineClose($pair, $date);
+            if ($price !== null && $price > 0) {
+                Log::info("[Binance] Fechamento de {$pair} em {$date->toDateString()}: USD {$price}");
+                return $price;
+            }
+        }
+
+        // Fallback 1: par em BRL — converte para USD via PTAX
+        $brlPair  = "{$symbol}BRL";
+        $priceBrl = $this->fetchBinanceKlineClose($brlPair, $date);
+        if ($priceBrl !== null && $priceBrl > 0) {
+            $ptax = $this->getUsdToBrlRate($date);
+            if ($ptax && $ptax > 0) {
+                $priceUsd = round($priceBrl / $ptax, 10);
+                Log::info("[Binance] {$brlPair} = R\$ {$priceBrl} ÷ PTAX {$ptax} = USD {$priceUsd}");
+                return $priceUsd;
+            }
+        }
+
+        // Fallback 2: par em BTC — converte via preço BTC/USDT do mesmo dia
+        $btcPair   = "{$symbol}BTC";
+        $priceInBtc = $this->fetchBinanceKlineClose($btcPair, $date);
+        if ($priceInBtc !== null && $priceInBtc > 0) {
+            $btcUsd = $this->fetchBinanceKlineClose('BTCUSDT', $date);
+            if ($btcUsd !== null && $btcUsd > 0) {
+                $priceUsd = round($priceInBtc * $btcUsd, 10);
+                Log::info("[Binance] {$btcPair} = {$priceInBtc} BTC × USD {$btcUsd} = USD {$priceUsd}");
+                return $priceUsd;
+            }
+        }
+
+        // Fallback 3: CoinGecko Demo (últimos 365 dias, gratuito com chave demo)
+        $cgPrice = $this->getCoinGeckoHistoricalPrice($symbol, $date);
+        if ($cgPrice !== null && $cgPrice > 0) {
+            return $cgPrice;
+        }
+
+        Log::warning("[Binance] Nenhum par encontrado para {$symbol} em {$date->toDateString()}.");
+        return null;
+    }
+
+    /**
+     * Busca o preço de fechamento de um par específico na Binance via klines.
+     * Retorna null se o par não existir, estiver deslistado ou sem dados na data.
+     */
+    private function fetchBinanceKlineClose(string $pair, Carbon $date): ?float
+    {
         try {
-            $response = Http::timeout(10)->get("https://api.binance.com/api/v3/klines", [
+            $response = Http::timeout(8)->get('https://api.binance.com/api/v3/klines', [
                 'symbol'    => $pair,
                 'interval'  => '1d',
                 'startTime' => $date->copy()->startOfDay()->getTimestampMs(),
@@ -282,18 +342,104 @@ class CryptoPriceService
                 'limit'     => 1,
             ]);
 
-            if ($response->successful() && count($response->json())) {
-                $closePrice = (float) $response->json()[0][4]; // índice 4 = close
-                Log::info("[Binance] Fechamento de {$pair} em {$date->toDateString()}: USD {$closePrice}");
-                return $closePrice;
+            if ($response->successful()) {
+                $data = $response->json();
+                if (is_array($data) && count($data) > 0 && isset($data[0][4])) {
+                    return (float) $data[0][4]; // índice 4 = preço de fechamento
+                }
             }
-
-            Log::warning("[Binance] Sem kline para {$pair} em {$date->toDateString()}. Par pode estar deslistado.");
-            return null;
-
         } catch (\Exception $e) {
-            Log::error("[Binance] Erro ao buscar kline para {$pair}: " . $e->getMessage());
+            Log::debug("[Binance] Exceção ao buscar {$pair}: " . $e->getMessage());
+        }
+
+        return null;
+    }
+
+    /**
+     * Fallback via CoinGecko Demo API (gratuito, últimos 365 dias).
+     *
+     * Requer chave demo configurada em COINGECKO_API_KEY no .env.
+     * Sem chave, a API retorna 429 (rate limit). Com chave demo gratuita:
+     *   - 10.000 requisições/mês
+     *   - Histórico limitado a 365 dias
+     *
+     * Mapeamento de símbolos Binance → ID CoinGecko para moedas conhecidas.
+     * Para símbolos não mapeados, tenta o símbolo em minúsculas como ID.
+     */
+    private function getCoinGeckoHistoricalPrice(string $symbol, Carbon $date): ?float
+    {
+        $apiKey = config('services.coingecko.api_key', env('COINGECKO_API_KEY'));
+        if (!$apiKey) {
+            Log::debug("[CoinGecko] COINGECKO_API_KEY não configurada. Pulando fallback.");
             return null;
         }
+
+        // Mapeamento símbolo Binance → ID CoinGecko
+        // Adicionar aqui moedas que tenham ID diferente do símbolo
+        $idMap = [
+            'BTC'   => 'bitcoin',
+            'ETH'   => 'ethereum',
+            'BNB'   => 'binancecoin',
+            'SOL'   => 'solana',
+            'ADA'   => 'cardano',
+            'DOT'   => 'polkadot',
+            'LUNA'  => 'terra-luna',        // LUNA clássica (colapsou mai/2022)
+            'LUNC'  => 'terra-luna',        // LUNA Classic (pós-colapso)
+            'LUNAC' => 'terra-luna',
+            'FTT'   => 'ftx-token',
+            'ATOM'  => 'cosmos',
+            'AVAX'  => 'avalanche-2',
+            'MATIC' => 'matic-network',
+            'SHIB'  => 'shiba-inu',
+            'DOGE'  => 'dogecoin',
+            'XRP'   => 'ripple',
+            'LTC'   => 'litecoin',
+            'LINK'  => 'chainlink',
+            'UNI'   => 'uniswap',
+            'AAVE'  => 'aave',
+            'ALGO'  => 'algorand',
+            'VET'   => 'vechain',
+            'XLM'   => 'stellar',
+            'TRX'   => 'tron',
+            'ETC'   => 'ethereum-classic',
+            'FIL'   => 'filecoin',
+            'NEAR'  => 'near',
+            'ICP'   => 'internet-computer',
+            'APT'   => 'aptos',
+            'ARB'   => 'arbitrum',
+            'OP'    => 'optimism',
+        ];
+
+        $coinId  = $idMap[$symbol] ?? strtolower($symbol);
+        // CoinGecko usa DD-MM-YYYY
+        $cgDate  = $date->format('d-m-Y');
+
+        Log::info("[CoinGecko] Buscando {$symbol} (id={$coinId}) em {$cgDate}...");
+
+        try {
+            $response = Http::timeout(10)
+                ->withHeaders(['x-cg-demo-api-key' => $apiKey])
+                ->get("https://api.coingecko.com/api/v3/coins/{$coinId}/history", [
+                    'date'         => $cgDate,
+                    'localization' => 'false',
+                ]);
+
+            if ($response->successful()) {
+                $priceUsd = data_get($response->json(), 'market_data.current_price.usd');
+                if ($priceUsd !== null && $priceUsd > 0) {
+                    Log::info("[CoinGecko] {$symbol} em {$cgDate}: USD {$priceUsd}");
+                    return (float) $priceUsd;
+                }
+                Log::warning("[CoinGecko] Sem market_data para {$coinId} em {$cgDate}.");
+            } elseif ($response->status() === 429) {
+                Log::warning('[CoinGecko] Rate limit atingido (429). Verifique a cota da chave demo.');
+            } else {
+                Log::warning("[CoinGecko] HTTP {$response->status()} para {$coinId} em {$cgDate}.");
+            }
+        } catch (\Exception $e) {
+            Log::error("[CoinGecko] Exceção para {$coinId}: " . $e->getMessage());
+        }
+
+        return null;
     }
 }
