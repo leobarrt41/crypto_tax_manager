@@ -795,17 +795,26 @@ private function parseNumeric($value): ?float
 
 private function transactionAlreadyExists(array $transactionData): bool
 {
-    // Para formatos que trazem identificador único da exchange (ex.: CSV anual Binance),
-    // deduplica por referência primeiro para não colapsar linhas distintas com mesmos valores.
+    // ── Estratégia 1: deduplicação cross-source por reference ──────────────────
+    //
+    // Quando a transação tem um identificador único da exchange, verificamos
+    // APENAS por user_id + reference, IGNORANDO source_type e source_id.
+    //
+    // Isso evita duplicatas quando o usuário importa via API automática e
+    // depois importa o mesmo período via CSV (ou vice-versa): ambas as fontes
+    // produzem o mesmo reference para a mesma operação na exchange.
     if (!empty($transactionData['reference'])) {
         return Transaction::query()
             ->where('user_id', $transactionData['user_id'])
-            ->where('source_type', $transactionData['source_type'])
-            ->where('source_id', $transactionData['source_id'])
             ->where('reference', $transactionData['reference'])
             ->exists();
     }
 
+    // ── Estratégia 2: deduplicação por conteúdo (sem reference) ────────────────
+    //
+    // Para transações sem identificador único (manuais ou formatos sem ID),
+    // mantemos source_type + source_id para evitar falsos positivos entre
+    // exchanges diferentes com mesmos valores no mesmo instante.
     $query = Transaction::query()
         ->where('user_id', $transactionData['user_id'])
         ->where('source_type', $transactionData['source_type'])

@@ -269,6 +269,9 @@
                   />
                   <label for="skip_duplicates" class="ml-2 block text-sm text-gray-900">
                     Pular transações duplicadas
+                    <span class="text-xs text-gray-500 block">
+                      Evita duplicatas mesmo que a operação já tenha sido importada via API automática
+                    </span>
                   </label>
                 </div>
               </div>
