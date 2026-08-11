@@ -14,6 +14,7 @@ class RecalculateFifoCommand extends Command
      */
     protected $signature = 'tax:recalculate-fifo
                             {user_id? : ID do usuário (omitir para processar todos)}
+                            {--year= : Ano fiscal a recalcular quando houver saldo inicial em 31/12 do ano anterior}
                             {--dry-run : Simula sem persistir alterações}';
 
     /**
@@ -33,11 +34,18 @@ class RecalculateFifoCommand extends Command
      */
     public function handle(): int
     {
-        $userId  = $this->argument('user_id') ? (int) $this->argument('user_id') : null;
-        $dryRun  = $this->option('dry-run');
+        $userId     = $this->argument('user_id') ? (int) $this->argument('user_id') : null;
+        $fiscalYear = $this->option('year') ? (int) $this->option('year') : null;
+        $dryRun     = $this->option('dry-run');
+
+        if ($fiscalYear !== null && ($fiscalYear < 2009 || $fiscalYear > 2099)) {
+            $this->error('O ano fiscal deve estar entre 2009 e 2099.');
+            return self::INVALID;
+        }
 
         $label = $userId ? "usuário #{$userId}" : 'todos os usuários';
-        $this->info("Iniciando recálculo FIFO para {$label}..." . ($dryRun ? ' [DRY-RUN]' : ''));
+        $periodLabel = $fiscalYear ? " a partir do ano fiscal {$fiscalYear}" : '';
+        $this->info("Iniciando recálculo FIFO para {$label}{$periodLabel}..." . ($dryRun ? ' [DRY-RUN]' : ''));
 
         if ($dryRun) {
             $this->warn('Modo dry-run ativo: nenhuma alteração será persistida.');
@@ -47,7 +55,7 @@ class RecalculateFifoCommand extends Command
         $start = microtime(true);
 
         try {
-            $stats = $this->fifo->recalculate($userId);
+            $stats = $this->fifo->recalculate($userId, $fiscalYear);
         } catch (\Throwable $e) {
             $this->error("Falha crítica: {$e->getMessage()}");
             return self::FAILURE;
@@ -62,6 +70,7 @@ class RecalculateFifoCommand extends Command
                 ['Usuários processados',      $stats['users_processed']],
                 ['Transações lidas',           $stats['transactions_read']],
                 ['Saídas processadas (FIFO)',  $stats['saidas_processed']],
+                ['Lotes iniciais aplicados',   $stats['opening_lots_loaded'] ?? 0],
                 ['Erros',                      count($stats['errors'])],
                 ['Tempo decorrido (s)',         $elapsed],
             ]

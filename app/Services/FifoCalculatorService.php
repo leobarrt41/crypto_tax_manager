@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Transaction;
 use App\Models\TaxMonthlySummary;
+use App\Models\FifoOpeningBalance;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -42,13 +43,14 @@ class FifoCalculatorService
      * @param  int|null  $userId  null = todos os usuários
      * @return array  Estatísticas do processamento
      */
-    public function recalculate(?int $userId = null): array
+    public function recalculate(?int $userId = null, ?int $fiscalYear = null): array
     {
         $stats = [
-            'users_processed'   => 0,
-            'transactions_read' => 0,
-            'saidas_processed'  => 0,
-            'errors'            => [],
+            'users_processed'      => 0,
+            'transactions_read'    => 0,
+            'saidas_processed'     => 0,
+            'opening_lots_loaded'  => 0,
+            'errors'               => [],
         ];
 
         $query = User::query();
@@ -60,10 +62,11 @@ class FifoCalculatorService
 
         foreach ($users as $user) {
             try {
-                $result = $this->recalculateForUser($user->id);
+                $result = $this->recalculateForUser($user->id, $fiscalYear);
                 $stats['users_processed']++;
-                $stats['transactions_read'] += $result['transactions_read'];
-                $stats['saidas_processed']  += $result['saidas_processed'];
+                $stats['transactions_read']   += $result['transactions_read'];
+                $stats['saidas_processed']    += $result['saidas_processed'];
+                $stats['opening_lots_loaded'] += $result['opening_lots_loaded'];
             } catch (\Throwable $e) {
                 $msg = "Erro ao processar user_id={$user->id}: {$e->getMessage()}";
                 Log::error($msg, ['trace' => $e->getTraceAsString()]);
@@ -77,42 +80,78 @@ class FifoCalculatorService
     /**
      * Recalcula FIFO para um único usuário dentro de uma transação DB.
      */
-    public function recalculateForUser(int $userId): array
+    public function recalculateForUser(int $userId, ?int $fiscalYear = null): array
     {
-        return DB::transaction(function () use ($userId) {
+        return DB::transaction(function () use ($userId, $fiscalYear) {
 
-            // ── 1. Zerar campos fiscais (idempotência) ──────────────────────────
-            Transaction::where('user_id', $userId)
-                ->update([
-                    'cost_basis_brl'  => null,
-                    'profit_loss_brl' => null,
-                    'fifo_lots'       => null,
-                    'fifo_processed'  => false,
-                ]);
+            // Quando o usuário informa saldos iniciais, o FIFO passa a ser
+            // recalculado a partir do ano fiscal correspondente. Isso evita somar
+            // novamente transações de anos anteriores ao estoque de 31/12 informado.
+            $openingBalanceQuery = FifoOpeningBalance::where('user_id', $userId);
 
-            // ── 2. Zerar resumos mensais existentes ─────────────────────────────
-            TaxMonthlySummary::where('user_id', $userId)->delete();
+            if ($fiscalYear !== null) {
+                // Para recalcular 2025, por exemplo, usa-se o último estoque
+                // cadastrado até 2025. Assim, um estoque de abertura de 2024
+                // continua sendo a base válida quando não houver novo saldo
+                // cadastrado para 2025.
+                $startYear = (clone $openingBalanceQuery)
+                    ->where('fiscal_year', '<=', $fiscalYear)
+                    ->max('fiscal_year');
 
-            // ── 3. Buscar todas as transações em ordem cronológica ───────────────
-            $transactions = Transaction::where('user_id', $userId)
+                $openingBalances = $startYear !== null
+                    ? $openingBalanceQuery->where('fiscal_year', $startYear)->orderBy('asset')->get()
+                    : collect();
+            } else {
+                $startYear = (clone $openingBalanceQuery)->min('fiscal_year');
+                $openingBalances = $startYear !== null
+                    ? $openingBalanceQuery->where('fiscal_year', $startYear)->orderBy('asset')->get()
+                    : collect();
+            }
+
+            // ── 1. Limitar o recálculo ao período correto ───────────────────────
+            $transactionsQuery = Transaction::where('user_id', $userId);
+            if ($startYear !== null) {
+                $transactionsQuery->whereYear('date', '>=', $startYear);
+            }
+
+            // ── 2. Zerar campos fiscais somente no escopo recalculado ───────────
+            (clone $transactionsQuery)->update([
+                'cost_basis_brl'  => null,
+                'profit_loss_brl' => null,
+                'fifo_lots'       => null,
+                'fifo_processed'  => false,
+            ]);
+
+            // ── 3. Zerar resumos mensais no mesmo escopo ────────────────────────
+            $summaryQuery = TaxMonthlySummary::where('user_id', $userId);
+            if ($startYear !== null) {
+                $summaryQuery->where('year', '>=', $startYear);
+            }
+            $summaryQuery->delete();
+
+            // ── 4. Buscar transações cronologicamente ───────────────────────────
+            $transactions = $transactionsQuery
                 ->orderBy('date')
                 ->orderBy('id')
                 ->get();
 
             $stats = [
-                'transactions_read' => $transactions->count(),
-                'saidas_processed'  => 0,
+                'transactions_read'   => $transactions->count(),
+                'saidas_processed'    => 0,
+                'opening_lots_loaded' => $openingBalances->count(),
+                'recalculated_from_year' => $startYear,
             ];
 
-            // ── 4. Estrutura de lotes FIFO por ativo ────────────────────────────
-            // $lots[$symbol] = [ ['qty' => float, 'cost_brl' => float, 'date' => string], ... ]
+            // ── 5. Estrutura de lotes FIFO por ativo ────────────────────────────
+            // $lots[$symbol] = [ ['qty', 'cost_brl', 'date', 'source'], ... ]
             $lots = [];
+            $this->seedOpeningBalances($lots, $openingBalances);
 
-            // ── 5. Acumulador mensal ─────────────────────────────────────────────
+            // ── 6. Acumulador mensal ────────────────────────────────────────────
             // $monthly[$year][$month] = ['alienacoes'=>0, 'lucro'=>0, 'prejuizo'=>0, 'qtd'=>0]
             $monthly = [];
 
-            // ── 6. Processar cada transação ──────────────────────────────────────
+            // ── 7. Processar cada transação ─────────────────────────────────────
             foreach ($transactions as $tx) {
                 $type = strtolower(trim($tx->type ?? ''));
 
@@ -151,7 +190,7 @@ class FifoCalculatorService
                 // Tipos desconhecidos são ignorados silenciosamente
             }
 
-            // ── 7. Persistir resumos mensais ─────────────────────────────────────
+            // ── 8. Persistir resumos mensais ─────────────────────────────────────
             $this->persistMonthly($userId, $monthly);
 
             return $stats;
@@ -244,17 +283,49 @@ class FifoCalculatorService
         string $asset,
         float $qty,
         float $costBrl,
-        $date
+        $date,
+        string $source = 'transaction',
+        ?int $openingBalanceId = null
     ): void {
+        $asset = strtoupper(trim($asset));
+
         if (!isset($lots[$asset])) {
             $lots[$asset] = [];
         }
 
         $lots[$asset][] = [
-            'qty'      => $qty,
-            'cost_brl' => $costBrl,
-            'date'     => $date instanceof \Carbon\Carbon ? $date->toDateTimeString() : (string) $date,
+            'qty'                => $qty,
+            'cost_brl'           => $costBrl,
+            'date'               => $date instanceof \Carbon\Carbon ? $date->toDateTimeString() : (string) $date,
+            'source'             => $source,
+            'opening_balance_id' => $openingBalanceId,
         ];
+    }
+
+    /**
+     * Injeta o estoque de 31/12 como os primeiros lotes FIFO do ano fiscal.
+     * Cada registro é rastreável posteriormente em transactions.fifo_lots.
+     */
+    private function seedOpeningBalances(array &$lots, $openingBalances): void
+    {
+        foreach ($openingBalances as $balance) {
+            $quantity = (float) $balance->quantity;
+            $costBrl  = (float) $balance->total_cost_brl;
+
+            if ($quantity <= 0 || $costBrl < 0 || empty($balance->asset)) {
+                continue;
+            }
+
+            $this->processEntradaAsset(
+                $lots,
+                $balance->asset,
+                $quantity,
+                $costBrl,
+                $balance->reference_date->copy()->endOfDay(),
+                'opening_balance',
+                $balance->id
+            );
+        }
     }
 
     private function processSaida(array &$lots, Transaction $tx): array
@@ -292,9 +363,11 @@ class FifoCalculatorService
                 $consumedCost = $consume * $lotCostUnit;
 
                 $consumedLots[] = [
-                    'lot_date'     => $lot['date'],
-                    'lot_qty'      => round($consume, 10),
-                    'lot_cost_brl' => round($consumedCost, 10),
+                    'lot_date'           => $lot['date'],
+                    'lot_qty'            => round($consume, 10),
+                    'lot_cost_brl'       => round($consumedCost, 10),
+                    'lot_source'         => $lot['source'] ?? 'transaction',
+                    'opening_balance_id' => $lot['opening_balance_id'] ?? null,
                 ];
 
                 $costBasisBrl    += $consumedCost;

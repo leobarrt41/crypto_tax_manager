@@ -186,6 +186,9 @@ Route::middleware(['auth:sanctum'])->prefix('tax-reports')->group(function () {
     // ── FIFO / Relatórios IR ──
     Route::get('/relatorio-ir/summary', [TaxReportController::class, 'monthlySummary']);
     Route::post('/relatorio-ir/recalculate', [TaxReportController::class, 'recalculateFifo']);
+    Route::get('/relatorio-ir/opening-balances', [TaxReportController::class, 'openingBalances']);
+    Route::post('/relatorio-ir/opening-balances', [TaxReportController::class, 'storeOpeningBalance']);
+    Route::delete('/relatorio-ir/opening-balances/{openingBalance}', [TaxReportController::class, 'destroyOpeningBalance']);
     Route::get('/relatorio-ir/export-csv', [TaxReportController::class, 'exportCsv']);
 
     // ── Status IN 1888 (obrigatoriedade mensal) ──

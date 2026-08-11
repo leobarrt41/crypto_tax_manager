@@ -184,6 +184,9 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::get('/relatorio-ir', [TaxReportController::class, 'index'])->name('relatorio-ir');
         Route::get('/relatorio-ir/summary', [TaxReportController::class, 'monthlySummary'])->name('relatorio-ir.summary');
         Route::post('/relatorio-ir/recalculate', [TaxReportController::class, 'recalculateFifo'])->name('relatorio-ir.recalculate');
+        Route::get('/relatorio-ir/opening-balances', [TaxReportController::class, 'openingBalances'])->name('relatorio-ir.opening-balances.index');
+        Route::post('/relatorio-ir/opening-balances', [TaxReportController::class, 'storeOpeningBalance'])->name('relatorio-ir.opening-balances.store');
+        Route::delete('/relatorio-ir/opening-balances/{openingBalance}', [TaxReportController::class, 'destroyOpeningBalance'])->name('relatorio-ir.opening-balances.destroy');
         Route::get('/relatorio-ir/export-csv', [TaxReportController::class, 'exportCsv'])->name('relatorio-ir.export-csv');
 
         // ── IN 1888 (status mensal/anual) via sessão web ──

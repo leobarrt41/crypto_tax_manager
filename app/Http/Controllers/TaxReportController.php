@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\TaxMonthlySummary;
+use App\Models\FifoOpeningBalance;
 use App\Services\FifoCalculatorService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -31,15 +32,30 @@ class TaxReportController extends Controller
             ->pluck('year')
             ->toArray();
 
-        // Se não houver resumos, tenta inferir dos anos de transações
-        if (empty($years)) {
-            $years = \App\Models\Transaction::where('user_id', $user->id)
-                ->selectRaw('YEAR(date) as year')
-                ->distinct()
-                ->orderByDesc('year')
-                ->pluck('year')
-                ->toArray();
-        }
+        // Complementar com anos existentes nas transações e nos saldos iniciais.
+        // Isso permite cadastrar e consultar o estoque de abertura mesmo antes
+        // de o recálculo ter gerado um resumo fiscal para o ano.
+        $transactionYears = \App\Models\Transaction::where('user_id', $user->id)
+            ->selectRaw('YEAR(date) as year')
+            ->distinct()
+            ->pluck('year')
+            ->toArray();
+
+        $openingBalanceYears = FifoOpeningBalance::where('user_id', $user->id)
+            ->distinct()
+            ->pluck('fiscal_year')
+            ->toArray();
+
+        // Sempre disponibiliza a janela fiscal padrão de cinco anos, mesmo que
+        // o usuário ainda não tenha transações ou resumos no banco.
+        $defaultYears = range(now()->year, now()->year - 5);
+
+        $years = collect([...$years, ...$transactionYears, ...$openingBalanceYears, ...$defaultYears])
+            ->filter()
+            ->unique()
+            ->sortDesc()
+            ->values()
+            ->all();
 
         return Inertia::render('Reports/RelatorioIR', [
             'availableYears' => $years,
@@ -105,10 +121,17 @@ class TaxReportController extends Controller
      */
     public function recalculateFifo(Request $request)
     {
+        $request->validate([
+            'fiscal_year' => 'nullable|integer|min:2009|max:2099',
+        ]);
+
         $user = Auth::user();
 
         try {
-            $stats = $this->fifo->recalculateForUser($user->id);
+            $stats = $this->fifo->recalculateForUser(
+                $user->id,
+                $request->filled('fiscal_year') ? (int) $request->fiscal_year : null
+            );
 
             return response()->json([
                 'success' => true,
@@ -121,6 +144,101 @@ class TaxReportController extends Controller
                 'message' => 'Erro ao recalcular FIFO: ' . $e->getMessage(),
             ], 500);
         }
+    }
+
+    /**
+     * Retorna os saldos de abertura usados como primeiro lote FIFO no ano.
+     * GET /reports/relatorio-ir/opening-balances?fiscal_year=2024
+     */
+    public function openingBalances(Request $request)
+    {
+        $request->validate([
+            'fiscal_year' => 'required|integer|min:2009|max:2099',
+        ]);
+
+        $balances = FifoOpeningBalance::where('user_id', Auth::id())
+            ->where('fiscal_year', (int) $request->fiscal_year)
+            ->orderBy('asset')
+            ->get()
+            ->map(fn (FifoOpeningBalance $balance) => $this->serializeOpeningBalance($balance));
+
+        return response()->json([
+            'fiscal_year' => (int) $request->fiscal_year,
+            'reference_date' => sprintf('31/12/%d', (int) $request->fiscal_year - 1),
+            'balances' => $balances,
+        ]);
+    }
+
+    /**
+     * Cria ou atualiza o saldo de abertura de um ativo para o ano fiscal.
+     * POST /reports/relatorio-ir/opening-balances
+     */
+    public function storeOpeningBalance(Request $request)
+    {
+        $data = $request->validate([
+            'fiscal_year'    => 'required|integer|min:2009|max:2099',
+            'asset'          => ['required', 'string', 'max:20', 'regex:/^[A-Za-z0-9._-]+$/'],
+            'quantity'       => 'required|numeric|gt:0',
+            'total_cost_brl' => 'required|numeric|min:0',
+            'source'         => 'nullable|string|max:100',
+            'notes'          => 'nullable|string|max:2000',
+        ]);
+
+        $data['asset']          = strtoupper(trim($data['asset']));
+        $data['reference_date'] = sprintf('%d-12-31', (int) $data['fiscal_year'] - 1);
+
+        $balance = FifoOpeningBalance::updateOrCreate(
+            [
+                'user_id'     => Auth::id(),
+                'fiscal_year' => $data['fiscal_year'],
+                'asset'       => $data['asset'],
+            ],
+            [
+                'reference_date' => $data['reference_date'],
+                'quantity'       => $data['quantity'],
+                'total_cost_brl' => $data['total_cost_brl'],
+                'source'         => $data['source'] ?? null,
+                'notes'          => $data['notes'] ?? null,
+            ]
+        );
+
+        return response()->json([
+            'success'         => true,
+            'message'         => "Saldo inicial de {$balance->asset} salvo. Execute o recálculo FIFO para aplicá-lo.",
+            'opening_balance' => $this->serializeOpeningBalance($balance),
+        ]);
+    }
+
+    /**
+     * Remove um saldo de abertura do usuário autenticado.
+     * DELETE /reports/relatorio-ir/opening-balances/{openingBalance}
+     */
+    public function destroyOpeningBalance(FifoOpeningBalance $openingBalance)
+    {
+        abort_unless($openingBalance->user_id === Auth::id(), 404);
+
+        $openingBalance->delete();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Saldo inicial removido. Execute o recálculo FIFO para atualizar a apuração.',
+        ]);
+    }
+
+    private function serializeOpeningBalance(FifoOpeningBalance $balance): array
+    {
+        return [
+            'id'               => $balance->id,
+            'fiscal_year'      => $balance->fiscal_year,
+            'reference_date'   => $balance->reference_date?->format('Y-m-d'),
+            'asset'            => $balance->asset,
+            'quantity'         => (float) $balance->quantity,
+            'total_cost_brl'   => (float) $balance->total_cost_brl,
+            'unit_cost_brl'    => $balance->unit_cost_brl,
+            'source'           => $balance->source,
+            'notes'            => $balance->notes,
+            'updated_at'       => $balance->updated_at?->toISOString(),
+        ];
     }
 
     /**

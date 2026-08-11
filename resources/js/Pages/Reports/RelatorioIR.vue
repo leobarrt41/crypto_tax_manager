@@ -94,6 +94,97 @@
           </div>
         </div>
 
+        <!-- ── Estoque inicial FIFO ───────────────────────────────────────── -->
+        <div class="bg-white rounded-lg shadow p-6 mb-6">
+          <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between mb-5">
+            <div>
+              <h3 class="text-lg font-semibold text-gray-800">Estoque inicial do FIFO</h3>
+              <p class="text-sm text-gray-600 mt-1">
+                Informe o saldo e o custo histórico existentes em <strong>31/12 do ano anterior</strong>.
+                Esses registros serão os primeiros lotes consumidos no recálculo FIFO do ano selecionado.
+              </p>
+            </div>
+            <span v-if="filters.year" class="inline-flex w-fit items-center rounded-full bg-blue-50 px-3 py-1 text-sm font-medium text-blue-700">
+              Ano fiscal {{ filters.year }} · referência 31/12/{{ Number(filters.year) - 1 }}
+            </span>
+          </div>
+
+          <div v-if="!filters.year" class="rounded-lg border border-dashed border-gray-300 p-5 text-sm text-gray-500">
+            Selecione um ano acima para cadastrar ou consultar o estoque inicial.
+          </div>
+
+          <template v-else>
+            <form class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4" @submit.prevent="salvarSaldoInicial">
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Ativo *</label>
+                <input v-model.trim="openingBalanceForm.asset" maxlength="20" placeholder="Ex.: BTC" required
+                       class="w-full rounded-md border-gray-300 uppercase focus:border-blue-500 focus:ring-blue-500" />
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Quantidade em 31/12 *</label>
+                <input v-model="openingBalanceForm.quantity" type="number" min="0" step="0.000000000001" required
+                       class="w-full rounded-md border-gray-300 focus:border-blue-500 focus:ring-blue-500" />
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Custo histórico total (R$) *</label>
+                <input v-model="openingBalanceForm.total_cost_brl" type="number" min="0" step="0.0000000001" required
+                       class="w-full rounded-md border-gray-300 focus:border-blue-500 focus:ring-blue-500" />
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Origem documental</label>
+                <input v-model.trim="openingBalanceForm.source" maxlength="100" placeholder="Ex.: CSV Binance 2023"
+                       class="w-full rounded-md border-gray-300 focus:border-blue-500 focus:ring-blue-500" />
+              </div>
+              <div class="md:col-span-2 lg:col-span-3">
+                <label class="block text-sm font-medium text-gray-700 mb-1">Observações</label>
+                <input v-model.trim="openingBalanceForm.notes" maxlength="2000" placeholder="Ex.: Custo consolidado de aquisições anteriores"
+                       class="w-full rounded-md border-gray-300 focus:border-blue-500 focus:ring-blue-500" />
+              </div>
+              <div class="flex items-end">
+                <button type="submit" :disabled="savingOpeningBalance"
+                        class="w-full rounded-lg bg-indigo-600 px-4 py-2 font-medium text-white transition-colors hover:bg-indigo-700 disabled:bg-gray-400">
+                  <span v-if="savingOpeningBalance">Salvando...</span>
+                  <span v-else>Salvar saldo inicial</span>
+                </button>
+              </div>
+            </form>
+
+            <div class="mt-6 overflow-x-auto rounded-lg border border-gray-200">
+              <div v-if="loadingOpeningBalances" class="p-6 text-center text-sm text-gray-500">Carregando saldos iniciais...</div>
+              <div v-else-if="openingBalances.length === 0" class="p-6 text-center text-sm text-gray-500">
+                Nenhum saldo inicial cadastrado para {{ filters.year }}. Sem um lote de abertura, o FIFO usará apenas as transações importadas.
+              </div>
+              <table v-else class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
+                  <tr>
+                    <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Ativo</th>
+                    <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500">Quantidade</th>
+                    <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500">Custo total</th>
+                    <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500">Custo médio</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Origem</th>
+                    <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500">Ação</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-200 bg-white">
+                  <tr v-for="balance in openingBalances" :key="balance.id">
+                    <td class="px-4 py-3 text-sm font-semibold text-gray-900">{{ balance.asset }}</td>
+                    <td class="px-4 py-3 text-right text-sm text-gray-700">{{ formatQuantity(balance.quantity) }}</td>
+                    <td class="px-4 py-3 text-right text-sm text-gray-700">{{ formatBRL(balance.total_cost_brl) }}</td>
+                    <td class="px-4 py-3 text-right text-sm text-gray-700">{{ formatBRL(balance.unit_cost_brl) }}</td>
+                    <td class="px-4 py-3 text-sm text-gray-500">
+                      <div>{{ balance.source || 'Não informada' }}</div>
+                      <div v-if="balance.notes" class="mt-1 max-w-xs text-xs text-gray-400">{{ balance.notes }}</div>
+                    </td>
+                    <td class="px-4 py-3 text-right">
+                      <button @click="removerSaldoInicial(balance)" class="text-sm font-medium text-red-600 hover:text-red-800">Remover</button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </template>
+        </div>
+
         <!-- ── Tabela de Resumo Mensal ─────────────────────────────────────── -->
         <div class="bg-white rounded-lg shadow overflow-hidden">
           <div class="p-4 border-b border-gray-200">
@@ -182,7 +273,7 @@
 </template>
 
 <script setup>
-import { ref, reactive } from 'vue'
+import { ref, reactive, watch } from 'vue'
 import { Link } from '@inertiajs/vue3'
 import AppLayout from '@/Layouts/AppLayout.vue'
 
@@ -211,9 +302,29 @@ const loadingData  = ref(false)
 const loadingRecalc = ref(false)
 const feedback     = reactive({ message: '', type: 'success' })
 
+const openingBalances = ref([])
+const loadingOpeningBalances = ref(false)
+const savingOpeningBalance = ref(false)
+const openingBalanceForm = reactive({
+  asset: '',
+  quantity: '',
+  total_cost_brl: '',
+  source: '',
+  notes: '',
+})
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
-const formatBRL = (value) =>
-  new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value ?? 0)
+const formatBRL = (value) => {
+  const normalized = Number(value)
+  return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number.isFinite(normalized) ? normalized : 0)
+}
+
+const formatQuantity = (value) => {
+  const normalized = Number(value)
+  return Number.isFinite(normalized)
+    ? new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 12 }).format(normalized)
+    : '0'
+}
 
 const showFeedback = (message, type = 'success') => {
   feedback.message = message
@@ -263,13 +374,14 @@ async function recalcularFifo() {
         'X-XSRF-TOKEN':     getCsrfToken(),
       },
       credentials: 'same-origin',
+      body: JSON.stringify(filters.year ? { fiscal_year: Number(filters.year) } : {}),
     })
     const data = await res.json()
 
     if (!res.ok || !data.success) throw new Error(data.message ?? 'Erro no recálculo.')
 
     showFeedback(
-      `Recálculo concluído: ${data.stats.transactions_read} transações lidas, ${data.stats.saidas_processed} saídas processadas.`,
+      `Recálculo concluído: ${data.stats.transactions_read} transações lidas, ${data.stats.saidas_processed} saídas processadas, ${data.stats.opening_lots_loaded ?? 0} lotes iniciais aplicados.`,
       'success'
     )
 
@@ -280,6 +392,100 @@ async function recalcularFifo() {
   } finally {
     loadingRecalc.value = false
   }
+}
+
+async function loadOpeningBalances() {
+  if (!filters.year) {
+    openingBalances.value = []
+    return
+  }
+
+  loadingOpeningBalances.value = true
+  try {
+    const params = new URLSearchParams({ fiscal_year: filters.year })
+    const res = await fetch(`/reports/relatorio-ir/opening-balances?${params}`, {
+      headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+      credentials: 'same-origin',
+    })
+    const data = await res.json()
+
+    if (!res.ok) throw new Error(data.message ?? 'Erro ao carregar saldos iniciais.')
+    openingBalances.value = data.balances ?? []
+  } catch (err) {
+    openingBalances.value = []
+    showFeedback(err.message, 'error')
+  } finally {
+    loadingOpeningBalances.value = false
+  }
+}
+
+async function salvarSaldoInicial() {
+  if (!filters.year) return
+
+  savingOpeningBalance.value = true
+  try {
+    const res = await fetch('/reports/relatorio-ir/opening-balances', {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'X-Requested-With': 'XMLHttpRequest',
+        'X-XSRF-TOKEN': getCsrfToken(),
+      },
+      credentials: 'same-origin',
+      body: JSON.stringify({
+        fiscal_year: Number(filters.year),
+        asset: openingBalanceForm.asset,
+        quantity: openingBalanceForm.quantity,
+        total_cost_brl: openingBalanceForm.total_cost_brl,
+        source: openingBalanceForm.source || null,
+        notes: openingBalanceForm.notes || null,
+      }),
+    })
+    const data = await res.json()
+
+    if (!res.ok || !data.success) throw new Error(data.message ?? 'Erro ao salvar saldo inicial.')
+
+    Object.assign(openingBalanceForm, { asset: '', quantity: '', total_cost_brl: '', source: '', notes: '' })
+    await loadOpeningBalances()
+    showFeedback(data.message, 'success')
+  } catch (err) {
+    showFeedback(err.message, 'error')
+  } finally {
+    savingOpeningBalance.value = false
+  }
+}
+
+async function removerSaldoInicial(balance) {
+  if (!window.confirm(`Remover o saldo inicial de ${balance.asset}?`)) return
+
+  try {
+    const res = await fetch(`/reports/relatorio-ir/opening-balances/${balance.id}`, {
+      method: 'DELETE',
+      headers: {
+        'Accept': 'application/json',
+        'X-Requested-With': 'XMLHttpRequest',
+        'X-XSRF-TOKEN': getCsrfToken(),
+      },
+      credentials: 'same-origin',
+    })
+    const data = await res.json()
+
+    if (!res.ok || !data.success) throw new Error(data.message ?? 'Erro ao remover saldo inicial.')
+
+    await loadOpeningBalances()
+    showFeedback(data.message, 'success')
+  } catch (err) {
+    showFeedback(err.message, 'error')
+  }
+}
+
+watch(() => filters.year, async () => {
+  await loadOpeningBalances()
+})
+
+if (filters.year) {
+  loadOpeningBalances()
 }
 
 function exportarCsv() {
