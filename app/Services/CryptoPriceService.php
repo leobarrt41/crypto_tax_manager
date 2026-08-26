@@ -317,12 +317,6 @@ class CryptoPriceService
             }
         }
 
-        // Fallback 3: CoinGecko Demo (últimos 365 dias, gratuito com chave demo)
-        $cgPrice = $this->getCoinGeckoHistoricalPrice($symbol, $date);
-        if ($cgPrice !== null && $cgPrice > 0) {
-            return $cgPrice;
-        }
-
         Log::warning("[Binance] Nenhum par encontrado para {$symbol} em {$date->toDateString()}.");
         return null;
     }
@@ -355,91 +349,4 @@ class CryptoPriceService
         return null;
     }
 
-    /**
-     * Fallback via CoinGecko Demo API (gratuito, últimos 365 dias).
-     *
-     * Requer chave demo configurada em COINGECKO_API_KEY no .env.
-     * Sem chave, a API retorna 429 (rate limit). Com chave demo gratuita:
-     *   - 10.000 requisições/mês
-     *   - Histórico limitado a 365 dias
-     *
-     * Mapeamento de símbolos Binance → ID CoinGecko para moedas conhecidas.
-     * Para símbolos não mapeados, tenta o símbolo em minúsculas como ID.
-     */
-    private function getCoinGeckoHistoricalPrice(string $symbol, Carbon $date): ?float
-    {
-        $apiKey = config('services.coingecko.api_key', env('COINGECKO_API_KEY'));
-        if (!$apiKey) {
-            Log::debug("[CoinGecko] COINGECKO_API_KEY não configurada. Pulando fallback.");
-            return null;
-        }
-
-        // Mapeamento símbolo Binance → ID CoinGecko
-        // Adicionar aqui moedas que tenham ID diferente do símbolo
-        $idMap = [
-            'BTC'   => 'bitcoin',
-            'ETH'   => 'ethereum',
-            'BNB'   => 'binancecoin',
-            'SOL'   => 'solana',
-            'ADA'   => 'cardano',
-            'DOT'   => 'polkadot',
-            'LUNA'  => 'terra-luna',        // LUNA clássica (colapsou mai/2022)
-            'LUNC'  => 'terra-luna',        // LUNA Classic (pós-colapso)
-            'LUNAC' => 'terra-luna',
-            'FTT'   => 'ftx-token',
-            'ATOM'  => 'cosmos',
-            'AVAX'  => 'avalanche-2',
-            'MATIC' => 'matic-network',
-            'SHIB'  => 'shiba-inu',
-            'DOGE'  => 'dogecoin',
-            'XRP'   => 'ripple',
-            'LTC'   => 'litecoin',
-            'LINK'  => 'chainlink',
-            'UNI'   => 'uniswap',
-            'AAVE'  => 'aave',
-            'ALGO'  => 'algorand',
-            'VET'   => 'vechain',
-            'XLM'   => 'stellar',
-            'TRX'   => 'tron',
-            'ETC'   => 'ethereum-classic',
-            'FIL'   => 'filecoin',
-            'NEAR'  => 'near',
-            'ICP'   => 'internet-computer',
-            'APT'   => 'aptos',
-            'ARB'   => 'arbitrum',
-            'OP'    => 'optimism',
-        ];
-
-        $coinId  = $idMap[$symbol] ?? strtolower($symbol);
-        // CoinGecko usa DD-MM-YYYY
-        $cgDate  = $date->format('d-m-Y');
-
-        Log::info("[CoinGecko] Buscando {$symbol} (id={$coinId}) em {$cgDate}...");
-
-        try {
-            $response = Http::timeout(10)
-                ->withHeaders(['x-cg-demo-api-key' => $apiKey])
-                ->get("https://api.coingecko.com/api/v3/coins/{$coinId}/history", [
-                    'date'         => $cgDate,
-                    'localization' => 'false',
-                ]);
-
-            if ($response->successful()) {
-                $priceUsd = data_get($response->json(), 'market_data.current_price.usd');
-                if ($priceUsd !== null && $priceUsd > 0) {
-                    Log::info("[CoinGecko] {$symbol} em {$cgDate}: USD {$priceUsd}");
-                    return (float) $priceUsd;
-                }
-                Log::warning("[CoinGecko] Sem market_data para {$coinId} em {$cgDate}.");
-            } elseif ($response->status() === 429) {
-                Log::warning('[CoinGecko] Rate limit atingido (429). Verifique a cota da chave demo.');
-            } else {
-                Log::warning("[CoinGecko] HTTP {$response->status()} para {$coinId} em {$cgDate}.");
-            }
-        } catch (\Exception $e) {
-            Log::error("[CoinGecko] Exceção para {$coinId}: " . $e->getMessage());
-        }
-
-        return null;
-    }
 }

@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Validator;
 use App\Models\CryptoAsset;
 use App\Models\TradingPair;
+use App\Services\CryptoPriceService;
 use CryptoAssetPrice;
 use Illuminate\Support\Facades\Log;
 use Inertia\Inertia;
@@ -200,7 +201,7 @@ class CryptoAssetController extends Controller
 $validator = Validator::make(
     ['exchange' => $exchange] + $request->all(),
     [
-        'exchange' => 'required|string|in:binance,binance_smart_chain,coinbase,kraken,coingecko',
+        'exchange' => 'required|string|in:binance,binance_smart_chain,coinbase,kraken',
         'limit' => 'nullable|integer|min:1|max:5000',
     ]
 );
@@ -344,7 +345,6 @@ $validator = Validator::make(
             'binance_smart_chain' => 'https://api.bscscan.com/api?module=token&action=listtokens&apikey=' . env('BSCSCAN_API_KEY'),
             'coinbase' => 'https://api.pro.coinbase.com/products',
             'kraken' => 'https://api.kraken.com/0/public/AssetPairs',
-            'coingecko' => "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page={$limit}&page=1",
             default => null,
         };
 
@@ -424,20 +424,6 @@ $validator = Validator::make(
             }
             break;
 
-            case 'coingecko':
-                foreach ($data as $crypto) {
-                    $result[] = [
-                        'symbol' => strtoupper($crypto['symbol']),
-                        'name' => $crypto['name'],
-                        'current_price_usd' => $crypto['current_price'],
-                        'price_change_24h' => $crypto['price_change_percentage_24h'],
-                        'market_cap' => $crypto['market_cap'],
-                        'volume_24h' => $crypto['total_volume'],
-                        'logo_url' => $crypto['image'],
-                    ];
-                }
-                break;
-
             case 'binance_smart_chain':
                 if (isset($data['result'])) {
                     foreach ($data['result'] as $crypto) {
@@ -477,64 +463,80 @@ $validator = Validator::make(
          return array_values($result); // para evitar index string
     }
 
+    /**
+     * Atualiza cotações atuais usando somente a Binance. Valores em BRL são
+     * obtidos do par direto em BRL ou da conversão USD/BRL pela PTAX do BCB.
+     */
     private function updateAssetsPrices(array $symbols): int
     {
         if (empty($symbols)) {
             return 0;
         }
 
-        // Usar CoinGecko para atualizar preços
-        $symbolsString = implode(',', array_map('strtolower', $symbols));
-        $url = "https://api.coingecko.com/api/v3/simple/price?ids={$symbolsString}&vs_currencies=usd,brl&include_24hr_change=true";
+        try {
+            $response = Http::timeout(30)->get('https://api.binance.com/api/v3/ticker/24hr');
+            if (!$response->successful()) {
+                Log::warning('Falha ao obter ticker de 24 horas da Binance.');
+                return 0;
+            }
 
-        $response = Http::timeout(30)->get($url);
+            $tickers = collect($response->json())->keyBy('symbol');
+            $ptax = app(CryptoPriceService::class)->getUsdToBrlRate(Carbon::now('America/Sao_Paulo'));
+            $stablecoins = ['USDT', 'USDC', 'BUSD', 'DAI', 'TUSD', 'FDUSD'];
+            $usdQuotes = ['USDT', 'BUSD', 'FDUSD', 'USDC'];
+            $updated = 0;
 
-        if (!$response->successful()) {
-            return 0;
-        }
+            foreach (array_unique(array_map(fn ($symbol) => strtoupper(trim((string) $symbol)), $symbols)) as $symbol) {
+                $asset = CryptoAsset::where('symbol', $symbol)->first();
+                if (!$asset) {
+                    continue;
+                }
 
-        $priceData = $response->json();
-        $updated = 0;
+                $tickerUsd = null;
+                foreach ($usdQuotes as $quote) {
+                    $candidate = $tickers->get("{$symbol}{$quote}");
+                    if ($candidate && (float) ($candidate['lastPrice'] ?? 0) > 0) {
+                        $tickerUsd = $candidate;
+                        break;
+                    }
+                }
 
-        foreach ($priceData as $coinId => $prices) {
-            $asset = CryptoAsset::where('symbol', strtoupper($coinId))->first();
-            
-            if ($asset) {
+                $tickerBrl = $tickers->get("{$symbol}BRL");
+                $priceUsd = in_array($symbol, $stablecoins, true)
+                    ? 1.0
+                    : (float) ($tickerUsd['lastPrice'] ?? 0);
+                $priceBrl = (float) ($tickerBrl['lastPrice'] ?? 0);
+
+                if ($priceBrl <= 0 && $priceUsd > 0 && $ptax !== null) {
+                    $priceBrl = round($priceUsd * $ptax, 10);
+                }
+
+                if ($priceUsd <= 0 && $priceBrl <= 0) {
+                    continue;
+                }
+
                 $asset->updatePriceData([
-                    'current_price_usd' => $prices['usd'] ?? null,
-                    'current_price_brl' => $prices['brl'] ?? null,
-                    'price_change_24h' => $prices['usd_24h_change'] ?? null,
+                    'current_price_usd' => $priceUsd > 0 ? $priceUsd : null,
+                    'current_price_brl' => $priceBrl > 0 ? $priceBrl : null,
+                    'price_change_24h' => $tickerUsd['priceChangePercent'] ?? $tickerBrl['priceChangePercent'] ?? null,
                 ]);
                 $updated++;
             }
-        }
 
-        return $updated;
+            return $updated;
+        } catch (\Exception $e) {
+            Log::warning('Erro ao atualizar preços pela Binance: ' . $e->getMessage());
+            return 0;
+        }
     }
 
+    /**
+     * No cadastro manual, tenta preencher somente os preços disponíveis na Binance.
+     * Metadados como logo e descrição permanecem sob controle do usuário.
+     */
     private function updateAssetMarketData(CryptoAsset $asset): void
     {
-        try {
-            $url = "https://api.coingecko.com/api/v3/coins/{$asset->symbol}";
-            $response = Http::timeout(15)->get($url);
-
-            if ($response->successful()) {
-                $data = $response->json();
-                
-                $asset->updateMarketData([
-                    'current_price_usd' => $data['market_data']['current_price']['usd'] ?? null,
-                    'current_price_brl' => $data['market_data']['current_price']['brl'] ?? null,
-                    'price_change_24h' => $data['market_data']['price_change_percentage_24h'] ?? null,
-                    'market_cap' => $data['market_data']['market_cap']['usd'] ?? null,
-                    'volume_24h' => $data['market_data']['total_volume']['usd'] ?? null,
-                    'logo_url' => $data['image']['large'] ?? null,
-                    'description' => $data['description']['en'] ?? null,
-                    'website' => $data['links']['homepage'][0] ?? null,
-                ]);
-            }
-        } catch (\Exception $e) {
-            Log::warning("Erro ao atualizar dados de mercado para {$asset->symbol}: " . $e->getMessage());
-        }
+        $this->updateAssetsPrices([$asset->symbol]);
     }
 
     private function getPriceHistory(CryptoAsset $cryptoAsset): array
