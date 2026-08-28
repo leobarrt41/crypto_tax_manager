@@ -2,23 +2,12 @@
 
 namespace App\Services;
 
-use App\Models\Transaction;
 use App\Models\TransactionImportCoverage;
 use App\Models\User;
-use App\Models\UserApiKey;
 use Carbon\Carbon;
-use Illuminate\Support\Collection;
 
 class TransactionImportCoverageService
 {
-    private const AUTOMATIC_SOURCES = [
-        'spot_trade' => 'binance_spot_api',
-        'convert' => 'binance_convert_api',
-        'deposit' => 'binance_deposit_api',
-        'withdrawal' => 'binance_withdrawal_api',
-        'asset_dividend' => 'binance_asset_dividend_api',
-    ];
-
     public function recordApiCoverage(
         User $user,
         int $exchangeId,
@@ -105,12 +94,6 @@ class TransactionImportCoverageService
             ->get()
             ->keyBy(fn (TransactionImportCoverage $item) => "{$item->month}:{$item->event_type}");
 
-        $apiKeyIds = UserApiKey::query()
-            ->where('user_id', $user->id)
-            ->where('exchange_id', $exchangeId)
-            ->pluck('id');
-
-        $manualTransactions = $this->manualTransactionsByPeriod($user, $year, $apiKeyIds);
         $months = [];
         $summary = [
             'api_covered' => 0,
@@ -126,7 +109,7 @@ class TransactionImportCoverageService
 
             foreach (TransactionImportCoverage::EVENT_TYPES as $eventType) {
                 $record = $coverage->get("{$month}:{$eventType}");
-                $csvCount = (int) ($manualTransactions[$month][$eventType] ?? 0);
+                $csvCount = (int) ($record?->csv_records_count ?? 0);
                 $apiStatus = $record?->api_status ?? 'not_checked';
                 $status = $this->resolveStatus($eventType, $apiStatus, $csvCount, $isFuture);
 
@@ -166,31 +149,6 @@ class TransactionImportCoverageService
         ];
     }
 
-    private function manualTransactionsByPeriod(User $user, int $year, Collection $apiKeyIds): array
-    {
-        if ($apiKeyIds->isEmpty()) {
-            return [];
-        }
-
-        return Transaction::query()
-            ->where('user_id', $user->id)
-            ->where('source_type', UserApiKey::class)
-            ->whereIn('source_id', $apiKeyIds)
-            ->whereYear('date', $year)
-            ->get(['date', 'type', 'source'])
-            ->filter(function (Transaction $transaction) {
-                return !in_array($transaction->source, self::AUTOMATIC_SOURCES, true);
-            })
-            ->groupBy(fn (Transaction $transaction) => $transaction->date->month)
-            ->map(function (Collection $transactions) {
-                return $transactions
-                    ->groupBy(fn (Transaction $transaction) => $this->eventTypeForTransaction($transaction->type))
-                    ->map(fn (Collection $items) => $items->count())
-                    ->all();
-            })
-            ->all();
-    }
-
     private function resolveStatus(string $eventType, string $apiStatus, int $csvCount, bool $isFuture): string
     {
         if ($isFuture) {
@@ -216,16 +174,4 @@ class TransactionImportCoverageService
         return 'csv_to_confirm';
     }
 
-    private function eventTypeForTransaction(?string $transactionType): string
-    {
-        return match ($transactionType) {
-            'trade' => 'spot_trade',
-            'convert' => 'convert',
-            'deposit' => 'deposit',
-            'withdrawal' => 'withdrawal',
-            'mining', 'staking' => 'earn_staking',
-            'fiat_buy', 'fiat_sell' => 'fiat',
-            default => 'other',
-        };
-    }
 }
