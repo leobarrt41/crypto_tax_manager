@@ -158,7 +158,7 @@ public function runSmartImport(?int $year = null): array
                         'spot_trade',
                         'partial',
                         $spotTrades,
-                        'A API Spot foi consultada para os pares conhecidos, mas exige símbolo por consulta. Importe o CSV de Spot para conferência integral.',
+                        'spot_pairs_checked: A API Spot foi consultada para os pares conhecidos, mas exige símbolo por consulta. Importe o CSV de Spot para conferência integral.',
                     );
                     $monthResult['events']['spot_trade'] = 'partial';
                     $result['spot_trades_imported'] = ($result['spot_trades_imported'] ?? 0) + $spotTrades;
@@ -171,7 +171,7 @@ public function runSmartImport(?int $year = null): array
                         'spot_trade',
                         'partial',
                         0,
-                        'Não foi possível concluir a consulta Spot: ' . $exception->getMessage(),
+                        'spot_pairs_checked: Não foi possível concluir a consulta Spot: ' . $exception->getMessage(),
                     );
                     $monthResult['events']['spot_trade'] = 'partial';
                 }

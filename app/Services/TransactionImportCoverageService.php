@@ -55,16 +55,23 @@ class TransactionImportCoverageService
      */
     public function wasApiChecked(User $user, int $exchangeId, int $year, int $month, string $eventType): bool
     {
-        return TransactionImportCoverage::query()
+        $query = TransactionImportCoverage::query()
             ->where([
                 'user_id' => $user->id,
                 'exchange_id' => $exchangeId,
                 'year' => $year,
                 'month' => $month,
                 'event_type' => $eventType,
-            ])
-            ->whereIn('api_status', ['completed', 'partial'])
-            ->exists();
+            ]);
+
+        if ($eventType === 'spot_trade') {
+            return $query
+                ->where('api_status', 'partial')
+                ->where('api_error', 'like', 'spot_pairs_checked:%')
+                ->exists();
+        }
+
+        return $query->whereIn('api_status', ['completed', 'partial'])->exists();
     }
 
     public function recordCsvCoverage(

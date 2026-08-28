@@ -111,7 +111,7 @@ class TransactionImportCoverageServiceTest extends TestCase
         $service = app(TransactionImportCoverageService::class);
 
         $service->recordApiCoverage($user, $exchangeId, 2026, 8, 'deposit', 'completed', 2);
-        $service->recordApiCoverage($user, $exchangeId, 2026, 8, 'spot_trade', 'partial', 0, 'Consulta por par requer CSV.');
+        $service->recordApiCoverage($user, $exchangeId, 2026, 8, 'spot_trade', 'partial', 0, 'spot_pairs_checked: Consulta por par requer CSV.');
         Transaction::query()->create([
             'user_id' => $user->id,
             'source_type' => UserApiKey::class,
