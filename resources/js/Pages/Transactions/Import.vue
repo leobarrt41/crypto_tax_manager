@@ -328,7 +328,7 @@
                       </select>
                     </div>
                     <div>
-                      <label class="block text-sm font-medium text-gray-700">Mês do relatório</label>
+                      <label class="block text-sm font-medium text-gray-700">Mês inicial do relatório</label>
                       <select v-model.number="csvForm.coverage_month" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm sm:text-sm">
                         <option v-for="month in months" :key="month.value" :value="month.value">{{ month.label }}</option>
                       </select>
@@ -341,7 +341,7 @@
                       </select>
                     </div>
                     <p class="sm:col-span-3 text-xs text-blue-700">
-                      São exibidos os tipos solicitados após a análise da cobertura automática. Em caso de falha da API, o CSV pode ser registrado manualmente como contingência. Essas informações não alteram as transações do arquivo; apenas registram a conferência fiscal da competência.
+                      São exibidos os tipos solicitados após a análise da cobertura automática. Em caso de falha da API, o CSV pode ser registrado manualmente como contingência. Essas informações não alteram as transações do arquivo. Para CSVs Binance de até três meses, o sistema confirma automaticamente todas as competências identificadas nas linhas importadas.
                     </p>
                   </div>
 

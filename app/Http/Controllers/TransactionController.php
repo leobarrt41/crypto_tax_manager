@@ -579,9 +579,12 @@ private function handleBinanceImport(Request $request): \Illuminate\Http\JsonRes
 
     $skipDuplicates = (bool) ($validated['skip_duplicates'] ?? true);
 
-    foreach ($rows as $row) {
-        $data = array_combine($headers, $row);
-        if (!$data || !array_filter($data, fn($value) => !is_null($value) && trim((string)$value) !== '')) {
+    /** @var array<int, true> $coveredMonths */
+    $coveredMonths = [];
+
+    foreach ($rows as $rowIndex => $row) {
+        $data = $this->combineImportedRow($headers, $row, $rowIndex + 2);
+        if ($data === null || !array_filter($data, fn($value) => !is_null($value) && trim((string)$value) !== '')) {
             continue;
         }
 
@@ -592,6 +595,13 @@ private function handleBinanceImport(Request $request): \Illuminate\Http\JsonRes
 
         $recognizedRows++;
 
+        if ($isBinanceExchangeImport) {
+            $transactionDate = Carbon::parse($transactionData['date'], 'America/Sao_Paulo');
+            if ($transactionDate->year === (int) $validated['coverage_year']) {
+                $coveredMonths[$transactionDate->month] = true;
+            }
+        }
+
         if ($skipDuplicates && $this->transactionAlreadyExists($transactionData)) {
             continue;
         }
@@ -600,20 +610,36 @@ private function handleBinanceImport(Request $request): \Illuminate\Http\JsonRes
         $imported++;
     }
 
-    if ($isBinanceExchangeImport) {
-        app(TransactionImportCoverageService::class)->recordCsvCoverage(
-            $request->user(),
-            $source->exchange_id,
-            (int) $validated['coverage_year'],
-            (int) $validated['coverage_month'],
-            $validated['report_type'],
-            $recognizedRows,
-            $uploadedFile->getClientOriginalName(),
-        );
+    if ($isBinanceExchangeImport && $recognizedRows > 0) {
+        $coverageService = app(TransactionImportCoverageService::class);
+        $monthsToConfirm = array_keys($coveredMonths);
+
+        // Mantém compatibilidade com formatos cujo mapeamento não traz data,
+        // sem confirmar um arquivo vazio ou não reconhecido.
+        if (empty($monthsToConfirm)) {
+            $monthsToConfirm = [(int) $validated['coverage_month']];
+        }
+
+        foreach ($monthsToConfirm as $month) {
+            $coverageService->recordCsvCoverage(
+                $request->user(),
+                $source->exchange_id,
+                (int) $validated['coverage_year'],
+                (int) $month,
+                $validated['report_type'],
+                $recognizedRows,
+                $uploadedFile->getClientOriginalName(),
+            );
+        }
+    }
+
+    $message = "{$imported} transações importadas com sucesso.";
+    if ($isBinanceExchangeImport && count($coveredMonths) > 1) {
+        $message .= ' A cobertura foi confirmada para ' . count($coveredMonths) . ' meses identificados no arquivo.';
     }
 
     return redirect()->route('transactions.index')
-        ->with('success', "{$imported} transações importadas com sucesso.");
+        ->with('success', $message);
 }
 
 private function mapImportedRowToTransactionData(array $data, string $format, string $sourceModel, int $sourceId): ?array
@@ -987,12 +1013,40 @@ private function transactionAlreadyExists(array $transactionData): bool
 private function extractRowsFromImportedFile(string $filePath, string $extension): array
 {
     if (in_array($extension, ['csv', 'txt'], true)) {
-        $csv = array_map('str_getcsv', file($filePath));
+        $handle = fopen($filePath, 'rb');
+        if ($handle === false) {
+            throw new \RuntimeException('Não foi possível abrir o arquivo CSV.');
+        }
+
+        try {
+            $firstLine = fgets($handle);
+            if ($firstLine === false) {
+                throw new \RuntimeException('Arquivo CSV vazio.');
+            }
+
+            $delimiter = $this->detectCsvDelimiter($firstLine);
+            rewind($handle);
+
+            $csv = [];
+            while (($row = fgetcsv($handle, 0, $delimiter)) !== false) {
+                // Ignora linhas vazias preservadas por alguns exportadores.
+                if ($row === [null]) {
+                    continue;
+                }
+                $csv[] = $row;
+            }
+        } finally {
+            fclose($handle);
+        }
+
         if (empty($csv)) {
             throw new \RuntimeException('Arquivo CSV vazio.');
         }
 
-        $headers = array_map('trim', $csv[0]);
+        $headers = array_map(
+            static fn ($header) => trim(preg_replace('/^\xEF\xBB\xBF/', '', (string) $header)),
+            $csv[0],
+        );
         $rows = array_slice($csv, 1);
 
         return [$headers, $rows];
@@ -1025,6 +1079,49 @@ private function extractRowsFromImportedFile(string $filePath, string $extension
     }
 
     throw new \RuntimeException('Formato de arquivo não suportado.');
+}
+
+/**
+ * Garante que uma linha tenha exatamente a largura do cabeçalho antes de
+ * associar colunas. CSVs Binance podem ter campos opcionais vazios no fim.
+ */
+private function combineImportedRow(array $headers, array $row, int $lineNumber): ?array
+{
+    $headerCount = count($headers);
+    if ($headerCount === 0) {
+        throw new \RuntimeException('O arquivo não possui cabeçalho válido.');
+    }
+
+    $row = array_values($row);
+    if (count($row) < $headerCount) {
+        $row = array_pad($row, $headerCount, null);
+    } elseif (count($row) > $headerCount) {
+        Log::warning('Linha CSV possui colunas adicionais; valores excedentes foram ignorados.', [
+            'line' => $lineNumber,
+            'headers' => $headerCount,
+            'values' => count($row),
+        ]);
+        $row = array_slice($row, 0, $headerCount);
+    }
+
+    return array_combine($headers, $row) ?: null;
+}
+
+private function detectCsvDelimiter(string $firstLine): string
+{
+    $candidates = [',', ';', "\t"];
+    $delimiter = ',';
+    $highestCount = -1;
+
+    foreach ($candidates as $candidate) {
+        $count = substr_count($firstLine, $candidate);
+        if ($count > $highestCount) {
+            $highestCount = $count;
+            $delimiter = $candidate;
+        }
+    }
+
+    return $delimiter;
 }
 
     // ===================================================================
