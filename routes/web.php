@@ -84,6 +84,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::get('/import', [TransactionController::class, 'import'])->name('import');
         Route::get('/create', [TransactionController::class, 'create'])->name('create');
         Route::post('/', [TransactionController::class, 'store'])->name('store');
+        Route::get('/delete-period/preview', [TransactionController::class, 'previewDestroyPeriod'])->name('destroy-period.preview');
+        Route::delete('/delete-period', [TransactionController::class, 'destroyPeriod'])->name('destroy-period');
         
         Route::get('/{transaction}', [TransactionController::class, 'show'])->whereNumber('transaction')->name('show');
         Route::get('/{transaction}/edit', [TransactionController::class, 'edit'])->whereNumber('transaction')->name('edit');

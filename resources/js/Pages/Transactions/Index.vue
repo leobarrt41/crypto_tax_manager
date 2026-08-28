@@ -28,10 +28,18 @@
               class="ml-3 inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary hover:bg-primary-dark focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary"
             >
               <svg class="-ml-1 mr-2 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m4-6h6m-6 0H6"></path>
               </svg>
               Nova Transação
             </Link>
+
+            <button
+              type="button"
+              @click="openPeriodDeletion"
+              class="ml-3 inline-flex items-center px-4 py-2 border border-red-200 rounded-md shadow-sm text-sm font-medium text-red-700 bg-red-50 hover:bg-red-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+            >
+              Excluir por período
+            </button>
 
               <button
                     @click="deleteAllTransactions"
@@ -440,6 +448,83 @@
         </div>
       </div>
 
+      <div v-if="periodDeletion.open" class="fixed inset-0 z-50 overflow-y-auto" role="dialog" aria-modal="true" aria-labelledby="delete-period-title">
+        <div class="fixed inset-0 bg-gray-900/50" @click="closePeriodDeletion"></div>
+        <div class="flex min-h-full items-center justify-center p-4">
+          <div class="relative w-full max-w-lg rounded-lg bg-white shadow-xl">
+            <div class="px-6 py-4 border-b border-gray-200 flex items-start justify-between gap-4">
+              <div>
+                <h3 id="delete-period-title" class="text-lg font-semibold text-gray-900">Excluir transações por período</h3>
+                <p class="mt-1 text-sm text-gray-500">A operação remove apenas suas transações do período escolhido.</p>
+              </div>
+              <button type="button" @click="closePeriodDeletion" class="text-gray-400 hover:text-gray-600" aria-label="Fechar">×</button>
+            </div>
+
+            <div class="px-6 py-5 space-y-4">
+              <div v-if="periodDeletion.error" class="rounded-md bg-red-50 p-3 text-sm text-red-700">{{ periodDeletion.error }}</div>
+
+              <template v-if="!periodDeletion.preview">
+                <div>
+                  <label for="delete-period-year" class="block text-sm font-medium text-gray-700">Ano</label>
+                  <select id="delete-period-year" v-model="periodDeletion.year" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-red-500 focus:border-red-500">
+                    <option v-for="year in deletionYears" :key="year" :value="year">{{ year }}</option>
+                  </select>
+                </div>
+                <div>
+                  <label for="delete-period-month" class="block text-sm font-medium text-gray-700">Mês <span class="font-normal text-gray-500">(opcional)</span></label>
+                  <select id="delete-period-month" v-model="periodDeletion.month" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-red-500 focus:border-red-500">
+                    <option value="">Ano inteiro</option>
+                    <option v-for="month in months" :key="month.value" :value="month.value">{{ month.label }}</option>
+                  </select>
+                </div>
+                <p class="rounded-md bg-amber-50 p-3 text-sm text-amber-800">Depois da exclusão, o sistema recalculará o FIFO a partir do ano selecionado. Confirme a prévia antes de continuar.</p>
+              </template>
+
+              <template v-else>
+                <div class="rounded-md bg-red-50 border border-red-100 p-4">
+                  <p class="font-medium text-red-900">Período: {{ periodDeletion.preview.period_label }}</p>
+                  <p class="mt-1 text-sm text-red-800"><strong>{{ periodDeletion.preview.transactions_count }}</strong> transação(ões) serão excluídas.</p>
+                  <p class="mt-1 text-sm text-red-800">Volume informado: <strong>{{ formatCurrency(periodDeletion.preview.total_brl, 'BRL') }}</strong>.</p>
+                  <p v-if="periodDeletion.preview.date_from" class="mt-1 text-xs text-red-700">Movimentações de {{ formatDate(periodDeletion.preview.date_from) }} até {{ formatDate(periodDeletion.preview.date_to) }}.</p>
+                </div>
+
+                <template v-if="periodDeletion.preview.transactions_count > 0">
+                  <label for="delete-period-confirmation" class="block text-sm font-medium text-gray-700">
+                    Para confirmar, digite <strong>{{ periodDeletion.preview.confirmation_phrase }}</strong>
+                  </label>
+                  <input id="delete-period-confirmation" v-model="periodDeletion.confirmation" type="text" autocomplete="off" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-red-500 focus:border-red-500" />
+                </template>
+                <p v-else class="text-sm text-gray-600">Nenhuma transação foi encontrada. Nada será excluído.</p>
+              </template>
+            </div>
+
+            <div class="px-6 py-4 bg-gray-50 border-t border-gray-200 flex justify-end gap-3">
+              <button type="button" @click="periodDeletion.preview ? resetPeriodPreview() : closePeriodDeletion()" class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50">
+                {{ periodDeletion.preview ? 'Voltar' : 'Cancelar' }}
+              </button>
+              <button
+                v-if="!periodDeletion.preview"
+                type="button"
+                @click="previewPeriodDeletion"
+                :disabled="periodDeletion.loading"
+                class="px-4 py-2 border border-transparent rounded-md text-sm font-medium text-white bg-red-600 hover:bg-red-700 disabled:opacity-50"
+              >
+                {{ periodDeletion.loading ? 'Consultando...' : 'Ver prévia' }}
+              </button>
+              <button
+                v-else-if="periodDeletion.preview.transactions_count > 0"
+                type="button"
+                @click="destroyPeriod"
+                :disabled="periodDeletion.loading || periodDeletion.confirmation !== periodDeletion.preview.confirmation_phrase"
+                class="px-4 py-2 border border-transparent rounded-md text-sm font-medium text-white bg-red-600 hover:bg-red-700 disabled:opacity-50"
+              >
+                {{ periodDeletion.loading ? 'Excluindo...' : 'Excluir período' }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
     </div>
   </AppLayout>
 </template>
@@ -455,6 +540,23 @@ import { route } from 'ziggy-js'
 // Variáveis de estado
 const loading = ref(false)
 const displayCurrency = ref('BRL')
+const currentYear = new Date().getFullYear()
+const deletionYears = Array.from({ length: currentYear - 2009 + 1 }, (_, index) => currentYear - index)
+const months = [
+  { value: 1, label: 'Janeiro' }, { value: 2, label: 'Fevereiro' }, { value: 3, label: 'Março' },
+  { value: 4, label: 'Abril' }, { value: 5, label: 'Maio' }, { value: 6, label: 'Junho' },
+  { value: 7, label: 'Julho' }, { value: 8, label: 'Agosto' }, { value: 9, label: 'Setembro' },
+  { value: 10, label: 'Outubro' }, { value: 11, label: 'Novembro' }, { value: 12, label: 'Dezembro' },
+]
+const periodDeletion = ref({
+  open: false,
+  year: currentYear,
+  month: '',
+  preview: null,
+  confirmation: '',
+  loading: false,
+  error: '',
+})
 
 // Props
 const props = defineProps({
@@ -627,6 +729,78 @@ const deleteTransaction = (id) => {
   }
 }
 
+const openPeriodDeletion = () => {
+  periodDeletion.value = {
+    open: true,
+    year: currentYear,
+    month: '',
+    preview: null,
+    confirmation: '',
+    loading: false,
+    error: '',
+  }
+}
+
+const closePeriodDeletion = () => {
+  if (!periodDeletion.value.loading) {
+    periodDeletion.value.open = false
+  }
+}
+
+const resetPeriodPreview = () => {
+  periodDeletion.value.preview = null
+  periodDeletion.value.confirmation = ''
+  periodDeletion.value.error = ''
+}
+
+const deletionPayload = () => ({
+  year: Number(periodDeletion.value.year),
+  ...(periodDeletion.value.month !== '' ? { month: Number(periodDeletion.value.month) } : {}),
+})
+
+const previewPeriodDeletion = async () => {
+  periodDeletion.value.loading = true
+  periodDeletion.value.error = ''
+
+  try {
+    const query = new URLSearchParams(deletionPayload()).toString()
+    const response = await fetch(`/transactions/delete-period/preview?${query}`, {
+      headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+    })
+    const payload = await response.json()
+
+    if (!response.ok) {
+      throw new Error(Object.values(payload.errors || {}).flat().join(' ') || 'Não foi possível consultar o período.')
+    }
+
+    periodDeletion.value.preview = payload
+  } catch (error) {
+    periodDeletion.value.error = error.message || 'Não foi possível consultar o período.'
+  } finally {
+    periodDeletion.value.loading = false
+  }
+}
+
+const destroyPeriod = () => {
+  periodDeletion.value.loading = true
+  periodDeletion.value.error = ''
+
+  router.delete('/transactions/delete-period', {
+    data: { ...deletionPayload(), confirmation: periodDeletion.value.confirmation },
+    preserveScroll: true,
+    onSuccess: () => {
+      periodDeletion.value.open = false
+      alert('As transações do período foram excluídas e o FIFO foi recalculado.')
+    },
+    onError: (errors) => {
+      periodDeletion.value.error = Object.values(errors || {}).flat().join(' ') || 'Não foi possível excluir o período.'
+    },
+    onFinish: () => {
+      periodDeletion.value.loading = false
+    },
+  })
+}
+
 const deleteAllTransactions = () => {
   // Primeira confirmação, mais simples.
   if (confirm('ATENÇÃO: Esta ação é irreversível e irá apagar TODAS as suas transações.\n\nTem certeza que deseja continuar?')) {
@@ -691,7 +865,19 @@ const getTypeIconClass = (type) => {
 }
 
 const formatDate = (date) => {
-  return new Date(date).toLocaleDateString('pt-BR', {
+  if (!date) return 'Data não informada'
+
+  // Datas vindas da prévia fiscal são YYYY-MM-DD e não devem sofrer conversão UTC.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    const [year, month, day] = date.split('-')
+    return `${day}/${month}/${year}`
+  }
+
+  const parsedDate = new Date(date)
+  if (Number.isNaN(parsedDate.getTime())) return 'Data não informada'
+
+  return parsedDate.toLocaleDateString('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',

@@ -336,6 +336,110 @@ public function destroyAll()
 
 
 
+    /**
+     * Retorna a prévia de uma exclusão por competência sem modificar dados.
+     * A resposta é usada pela interface para apresentar a confirmação correta.
+     */
+    public function previewDestroyPeriod(Request $request): \Illuminate\Http\JsonResponse
+    {
+        $period = $this->validatedDeletionPeriod($request);
+        $transactions = $this->periodTransactionsQuery(auth()->id(), $period['year'], $period['month']);
+        $count = (clone $transactions)->count();
+
+        $dateFrom = (clone $transactions)->min('date');
+        $dateTo = (clone $transactions)->max('date');
+
+        return response()->json([
+            'year' => $period['year'],
+            'month' => $period['month'],
+            'period_label' => $this->deletionPeriodLabel($period['year'], $period['month']),
+            'transactions_count' => $count,
+            'total_brl' => round((float) ((clone $transactions)->sum('total_brl') ?? 0), 2),
+            'date_from' => $dateFrom ? Carbon::parse($dateFrom)->toDateString() : null,
+            'date_to' => $dateTo ? Carbon::parse($dateTo)->toDateString() : null,
+            'types' => (clone $transactions)
+                ->selectRaw('type, COUNT(*) as count')
+                ->groupBy('type')
+                ->orderBy('type')
+                ->pluck('count', 'type'),
+            'confirmation_phrase' => 'EXCLUIR ' . $this->deletionPeriodLabel($period['year'], $period['month']),
+        ]);
+    }
+
+    /**
+     * Exclui somente as transações do usuário autenticado no ano selecionado,
+     * podendo restringir a operação a um mês. O recálculo FIFO reconstitui os
+     * resultados fiscais a partir da competência afetada.
+     */
+    public function destroyPeriod(Request $request)
+    {
+        $period = $this->validatedDeletionPeriod($request);
+        $expectedConfirmation = 'EXCLUIR ' . $this->deletionPeriodLabel($period['year'], $period['month']);
+        $receivedConfirmation = strtoupper(trim((string) $request->input('confirmation')));
+
+        if (!hash_equals($expectedConfirmation, $receivedConfirmation)) {
+            return back()->withErrors([
+                'confirmation' => "Confirmação inválida. Digite exatamente: {$expectedConfirmation}",
+            ]);
+        }
+
+        $userId = auth()->id();
+        $transactions = $this->periodTransactionsQuery($userId, $period['year'], $period['month']);
+        $count = (clone $transactions)->count();
+
+        if ($count === 0) {
+            return back()->with('warning', 'Não há transações no período selecionado para excluir.');
+        }
+
+        DB::transaction(function () use ($transactions) {
+            $transactions->delete();
+        });
+
+        try {
+            $recalculation = app(FifoCalculatorService::class)->recalculateForUser($userId, $period['year']);
+            $message = "{$count} transação(ões) de {$this->deletionPeriodLabel($period['year'], $period['month'])} foram excluídas e o FIFO foi recalculado.";
+
+            return back()->with('success', $message)->with('fifo_recalculation', $recalculation);
+        } catch (\Throwable $exception) {
+            Log::error('[Exclusão por período] Transações removidas, mas o recálculo FIFO falhou.', [
+                'user_id' => $userId,
+                'year' => $period['year'],
+                'month' => $period['month'],
+                'error' => $exception->getMessage(),
+            ]);
+
+            return back()->with('warning', "{$count} transação(ões) foram excluídas, mas o recálculo FIFO falhou. Execute o recálculo fiscal antes de gerar relatórios.");
+        }
+    }
+
+    private function validatedDeletionPeriod(Request $request): array
+    {
+        $data = $request->validate([
+            'year' => ['required', 'integer', 'min:2009', 'max:' . now()->year],
+            'month' => ['nullable', 'integer', 'between:1,12'],
+        ]);
+
+        return [
+            'year' => (int) $data['year'],
+            'month' => array_key_exists('month', $data) && $data['month'] !== null ? (int) $data['month'] : null,
+        ];
+    }
+
+    private function periodTransactionsQuery(int $userId, int $year, ?int $month)
+    {
+        return Transaction::query()
+            ->where('user_id', $userId)
+            ->whereYear('date', $year)
+            ->when($month !== null, fn ($query) => $query->whereMonth('date', $month));
+    }
+
+    private function deletionPeriodLabel(int $year, ?int $month): string
+    {
+        return $month === null
+            ? (string) $year
+            : str_pad((string) $month, 2, '0', STR_PAD_LEFT) . '/' . $year;
+    }
+
     // ===================================================================
     // PONTOS DE ENTRADA PARA IMPORTAÇÃO
     // ===================================================================
