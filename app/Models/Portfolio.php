@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasManyThrough;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Portfolio extends Model
@@ -48,17 +49,24 @@ class Portfolio extends Model
         return $this->hasMany(PortfolioSnapshot::class);
     }
 
-    public function walletBalances(): HasMany
+    public function walletBalances(): HasManyThrough
     {
-        return $this->hasMany(WalletBalance::class);
+        return $this->hasManyThrough(
+            WalletBalance::class,
+            Wallet::class,
+            'user_id',
+            'wallet_id',
+            'user_id',
+            'id'
+        );
     }
 
     // Métodos auxiliares
     public function updateTotalValue(): void
     {
         $totalValue = $this->walletBalances()
-            ->join('crypto_assets', 'wallet_balances.crypto_asset_id', '=', 'crypto_assets.id')
-            ->selectRaw('SUM(wallet_balances.balance * crypto_assets.current_price_brl) as total')
+            ->join('crypto_assets', 'wallet_balances.asset', '=', 'crypto_assets.symbol')
+            ->selectRaw('SUM((wallet_balances.available + wallet_balances.locked) * crypto_assets.current_price_brl) as total')
             ->value('total') ?? 0;
 
         $this->update([
