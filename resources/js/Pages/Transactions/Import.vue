@@ -320,7 +320,7 @@
                     </select>
                   </div>
 
-                  <div v-if="isBinanceCsvSource" class="grid grid-cols-1 gap-4 sm:grid-cols-3 mb-4 rounded-md border border-blue-100 bg-blue-50 p-4">
+                  <div v-if="isBinanceCsvSource && csvCoverageFormVisible" class="grid grid-cols-1 gap-4 sm:grid-cols-3 mb-4 rounded-md border border-blue-100 bg-blue-50 p-4">
                     <div>
                       <label class="block text-sm font-medium text-gray-700">Ano do relatório</label>
                       <select v-model.number="csvForm.coverage_year" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm sm:text-sm">
@@ -337,13 +337,17 @@
                       <label class="block text-sm font-medium text-gray-700">Tipo de operação</label>
                       <select v-model="csvForm.report_type" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm sm:text-sm">
                         <option value="">Selecione</option>
-                        <option v-for="type in reportTypes" :key="type.value" :value="type.value">{{ type.label }}</option>
+                        <option v-for="type in csvRequestedReportTypes" :key="type.value" :value="type.value">{{ type.label }}</option>
                       </select>
                     </div>
                     <p class="sm:col-span-3 text-xs text-blue-700">
-                      Estas informações não alteram as transações do arquivo; elas registram a cobertura da competência e permitem indicar quais relatórios ainda faltam.
+                      São exibidos os tipos solicitados após a análise da cobertura automática. Em caso de falha da API, o CSV pode ser registrado manualmente como contingência. Essas informações não alteram as transações do arquivo; apenas registram a conferência fiscal da competência.
                     </p>
                   </div>
+
+                  <p v-else-if="isBinanceCsvSource" class="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                    Primeiro execute a sincronização anual da Binance e atualize a cobertura. O sistema indicará quais CSVs deste ano ainda precisam ser importados.
+                  </p>
 
                   <div v-if="csvForm.source_type === 'wallet'" class="mb-4">
                     <label class="block text-sm font-medium text-gray-700">Carteira</label>
@@ -419,7 +423,7 @@
               </tbody>
             </table>
           </div>
-          <div v-else class="px-6 py-4 text-sm text-gray-500">Selecione uma chave Binance e atualize a cobertura para consultar as competências.</div>
+          <div v-else class="px-6 py-4 text-sm text-gray-500">Inicie a sincronização anual e, quando ela terminar, clique em “Atualizar cobertura”. Somente então o sistema solicitará os CSVs que faltarem.</div>
         </div>
       </section>
 
@@ -562,6 +566,21 @@ const isBinanceExchange = computed(() => exchangeForm.value.exchange.toLowerCase
 const selectedExchangeKeys = computed(() => availableKeys.value.filter(key => key.exchange.toLowerCase() === exchangeForm.value.exchange.toLowerCase()))
 const selectedCsvKey = computed(() => props.userApiKeys.find(key => Number(key.id) === Number(csvForm.value.source_id)))
 const isBinanceCsvSource = computed(() => csvForm.value.source_type === 'exchange' && selectedCsvKey.value?.exchange?.name?.toLowerCase() === 'binance')
+const csvCoverageFormVisible = computed(() => isBinanceCsvSource.value && Boolean(coverage.value || coverageError.value))
+const csvRequestedReportTypes = computed(() => {
+  if (!coverage.value) {
+    return coverageError.value ? reportTypes : []
+  }
+
+  const monthCoverage = coverage.value.months?.find((month) => Number(month.month) === Number(csvForm.value.coverage_month))
+  const requestedTypes = new Set(
+    (monthCoverage?.events || [])
+      .filter((event) => ['csv_to_confirm', 'api_failed'].includes(event.status))
+      .map((event) => event.event_type),
+  )
+
+  return reportTypes.filter((type) => requestedTypes.has(type.value))
+})
 
 
 
@@ -646,7 +665,8 @@ const loadCoverage = async () => {
     })
 
     if (!response.ok) {
-      throw new Error('Não foi possível consultar a cobertura da importação.')
+      const payload = await response.json().catch(() => ({}))
+      throw new Error(payload.message || 'Não foi possível consultar a cobertura da importação.')
     }
 
     coverage.value = await response.json()
@@ -796,7 +816,10 @@ const importFromCSV = async () => {
 
 watch(
   () => [exchangeForm.value.api_key_id, exchangeForm.value.year],
-  () => loadCoverage(),
+  () => {
+    csvForm.value.coverage_year = exchangeForm.value.year
+    loadCoverage()
+  },
 )
 
 onMounted(() => loadCoverage())

@@ -495,9 +495,19 @@ public function destroyAll()
             ->whereHas('exchange', fn ($query) => $query->where('name', 'binance'))
             ->firstOrFail();
 
-        return response()->json(
-            $coverageService->forYear($request->user(), $apiKey->exchange_id, (int) $validated['year'])
-        );
+        try {
+            return response()->json(
+                $coverageService->forYear($request->user(), $apiKey->exchange_id, (int) $validated['year'])
+            );
+        } catch (\Illuminate\Database\QueryException $exception) {
+            if (str_contains($exception->getMessage(), 'transaction_import_coverages')) {
+                return response()->json([
+                    'message' => 'A estrutura de cobertura ainda não foi criada neste ambiente. Execute “php artisan migrate” e tente novamente.',
+                ], 409);
+            }
+
+            throw $exception;
+        }
     }
 
     /**
