@@ -133,7 +133,7 @@ class TransactionImportCoverageServiceTest extends TestCase
         $this->assertTrue($service->wasApiCovered($user, $exchangeId, 2026, 8, 'deposit'));
         $this->assertSame('api_covered', $events['deposit']['status']);
         $this->assertSame('csv_confirmed', $events['spot_trade']['status']);
-        $this->assertSame('csv_to_confirm', $events['withdrawal']['status']);
+        $this->assertSame('awaiting_sync', $events['withdrawal']['status']);
         $this->assertSame('spot-08-2026.csv', $events['spot_trade']['csv_filename']);
     }
 }

@@ -106,9 +106,10 @@ public function runSmartImport(?int $year = null): array
         Log::info("======================================================================");
         Log::info("🔧 [Fase 0: Preparação] Atualizando dados base...");
         Log::info("======================================================================");
-        $this->syncExchangeCatalog();
+        // O catálogo de pares é caro e não é necessário para Convert, depósitos
+        // ou saques. Ele é sincronizado em fluxo próprio, não a cada importação.
         $this->updateCryptoAssetsFromBinance();
-        Log::info("✅ [Fase 0: Preparação] Concluída sem reconstruir snapshots históricos.");
+        Log::info("✅ [Fase 0: Preparação] Concluída sem reconstruir snapshots históricos ou o catálogo de pares.");
     }
 
     /**
@@ -306,7 +307,8 @@ public function runSmartImport(?int $year = null): array
 
         $date = Carbon::createFromTimestampMs((int) $timestamp);
         $assetId = CryptoAsset::firstOrCreate(['symbol' => $asset], ['name' => $asset])->id;
-        $totalUsdt = $this->calculateTotalUsdt($asset, $amount, $date);
+        // A cotação será enriquecida de forma assíncrona após a persistência.
+        $totalUsdt = 0.0;
 
         Transaction::updateOrCreate(
             ['user_id' => $this->user->id, 'reference' => (string) ($record['id'] ?? $record['txId'])],
@@ -319,7 +321,7 @@ public function runSmartImport(?int $year = null): array
                 'to_amount' => $amount,
                 'to_crypto_asset_id' => $assetId,
                 'total_usdt' => $totalUsdt,
-                'total_brl' => $this->calculateTotalBrl($totalUsdt, $date),
+                'total_brl' => 0.0,
                 'txid' => $record['txId'] ?? null,
                 'date' => $date,
                 'source' => 'binance_deposit_api',
@@ -341,7 +343,8 @@ public function runSmartImport(?int $year = null): array
             ? Carbon::createFromTimestampMs((int) $timestamp)
             : Carbon::parse($timestamp, 'America/Sao_Paulo');
         $assetId = CryptoAsset::firstOrCreate(['symbol' => $asset], ['name' => $asset])->id;
-        $totalUsdt = $this->calculateTotalUsdt($asset, $amount, $date);
+        // A cotação será enriquecida de forma assíncrona após a persistência.
+        $totalUsdt = 0.0;
 
         Transaction::updateOrCreate(
             ['user_id' => $this->user->id, 'reference' => (string) ($record['id'] ?? $record['txId'])],
@@ -354,7 +357,7 @@ public function runSmartImport(?int $year = null): array
                 'from_amount' => $amount,
                 'from_crypto_asset_id' => $assetId,
                 'total_usdt' => $totalUsdt,
-                'total_brl' => $this->calculateTotalBrl($totalUsdt, $date),
+                'total_brl' => 0.0,
                 'txid' => $record['txId'] ?? null,
                 'date' => $date,
                 'source' => 'binance_withdrawal_api',
@@ -1299,8 +1302,11 @@ private function generateSnapshotsFromCryptoAssets(): void
         $fromAssetId = CryptoAsset::firstOrCreate(['symbol' => $fromAssetSymbol], ['name' => $fromAssetSymbol])->id;
         $toAssetId = CryptoAsset::firstOrCreate(['symbol' => $toAssetSymbol], ['name' => $toAssetSymbol])->id;
 
-        $totalUsdt = $this->calculateTotalUsdt($toAssetSymbol, (float)$conv['toAmount'], $date);
-        $totalBrl = $this->calculateTotalBrl($totalUsdt, $date);
+        // A resolução histórica de preço é feita pelo job de verificação após a
+        // sincronização. Consultá-la para cada conversão bloqueava a fila em
+        // ativos sem par vigente e impedia o registro da cobertura mensal.
+        $totalUsdt = 0.0;
+        $totalBrl = 0.0;
 
         Transaction::updateOrCreate(
             ['user_id' => $this->user->id, 'reference' => $conv['quoteId']],

@@ -399,7 +399,7 @@
           <div class="px-6 py-4 border-b border-gray-200 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h3 class="text-lg font-medium text-gray-900">Cobertura de importação — {{ exchangeForm.year }}</h3>
-              <p class="mt-1 text-sm text-gray-500">A API cobre Convert, depósitos e saques. Use os CSVs indicados para confirmar eventos não cobertos ou consultas com falha.</p>
+              <p class="mt-1 text-sm text-gray-500">Execute primeiro a sincronização. Depois, a análise indicará apenas os CSVs necessários para eventos não cobertos ou consultas com falha.</p>
             </div>
             <button @click="loadCoverage" :disabled="coverageLoading" class="inline-flex justify-center rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">
               {{ coverageLoading ? 'Atualizando...' : 'Atualizar cobertura' }}
@@ -683,6 +683,7 @@ const coverageStatusLabel = (status) => ({
   csv_confirmed: 'CSV confirmado',
   csv_to_confirm: 'CSV pendente',
   api_failed: 'falha na API',
+  awaiting_sync: 'aguardando sincronização',
   not_due: 'competência futura',
 }[status] || status)
 
@@ -691,6 +692,7 @@ const coverageStatusClass = (status) => ({
   csv_confirmed: 'bg-blue-100 text-blue-800',
   csv_to_confirm: 'bg-amber-100 text-amber-800',
   api_failed: 'bg-red-100 text-red-800',
+  awaiting_sync: 'bg-slate-100 text-slate-700',
   not_due: 'bg-gray-100 text-gray-500',
 }[status] || 'bg-gray-100 text-gray-700')
 

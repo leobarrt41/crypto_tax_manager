@@ -171,7 +171,7 @@ class TransactionImportCoverageService
             return 'csv_confirmed';
         }
 
-        return 'csv_to_confirm';
+        return $apiStatus === 'not_checked' ? 'awaiting_sync' : 'csv_to_confirm';
     }
 
 }
