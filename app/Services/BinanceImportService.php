@@ -20,6 +20,8 @@ class BinanceImportService
     private array $priceCache = [];
     // Cache para os símbolos de negociação válidos da Binance.
     private ?array $validSymbols = null;
+    /** @var array<int, string> */
+    private array $accountAssets = [];
 
     protected User $user;
     protected UserApiKey $apiKey;
@@ -139,7 +141,42 @@ public function runSmartImport(?int $year = null): array
                 'events' => [],
             ];
 
-            $monthResult['events']['spot_trade'] = $this->markSpotAsCsvRequired($year, $month, $isCurrentMonth);
+            if (!$isCurrentMonth && $this->coverageService->wasApiChecked($this->user, $this->apiKey->exchange_id, $year, $month, 'spot_trade')) {
+                $monthResult['events']['spot_trade'] = 'skipped';
+            } else {
+                try {
+                    $spotTrades = $this->importSpotTradesForMonth(
+                        $this->spotAssetsForMonth($year, $month),
+                        $monthStart,
+                        $monthEnd,
+                    );
+                    $this->coverageService->recordApiCoverage(
+                        $this->user,
+                        $this->apiKey->exchange_id,
+                        $year,
+                        $month,
+                        'spot_trade',
+                        'partial',
+                        $spotTrades,
+                        'A API Spot foi consultada para os pares conhecidos, mas exige símbolo por consulta. Importe o CSV de Spot para conferência integral.',
+                    );
+                    $monthResult['events']['spot_trade'] = 'partial';
+                    $result['spot_trades_imported'] = ($result['spot_trades_imported'] ?? 0) + $spotTrades;
+                } catch (\Throwable $exception) {
+                    $this->coverageService->recordApiCoverage(
+                        $this->user,
+                        $this->apiKey->exchange_id,
+                        $year,
+                        $month,
+                        'spot_trade',
+                        'partial',
+                        0,
+                        'Não foi possível concluir a consulta Spot: ' . $exception->getMessage(),
+                    );
+                    $monthResult['events']['spot_trade'] = 'partial';
+                }
+            }
+
             $monthResult['events']['asset_dividend'] = $this->markDividendAsCsvRequired($year, $month, $isCurrentMonth);
 
             foreach ([
@@ -188,26 +225,29 @@ public function runSmartImport(?int $year = null): array
         return $result;
     }
 
-    private function markSpotAsCsvRequired(int $year, int $month, bool $isCurrentMonth): string
+    /**
+     * A API Spot exige um símbolo. Limitamos a busca aos ativos com saldo atual
+     * e aos ativos que já apareceram no histórico do usuário, reduzindo chamadas
+     * desnecessárias sem afirmar que a cobertura é integral.
+     *
+     * @return array<int, string>
+     */
+    private function spotAssetsForMonth(int $year, int $month): array
     {
-        if (!$isCurrentMonth && $this->coverageService->wasApiCovered($this->user, $this->apiKey->exchange_id, $year, $month, 'spot_trade')) {
-            return 'skipped';
-        }
+        $assetsFromTransactions = Transaction::query()
+            ->where('user_id', $this->user->id)
+            ->whereYear('date', $year)
+            ->whereMonth('date', $month)
+            ->where(function ($query) {
+                $query->whereNotNull('from_asset')->orWhereNotNull('to_asset');
+            })
+            ->get(['from_asset', 'to_asset'])
+            ->flatMap(fn (Transaction $transaction) => [$transaction->from_asset, $transaction->to_asset])
+            ->filter()
+            ->map(fn (string $asset) => strtoupper($asset))
+            ->all();
 
-        // A API oficial exige um símbolo por consulta. Sem uma lista histórica
-        // completa de pares não é seguro declarar o mês Spot como coberto.
-        $this->coverageService->recordApiCoverage(
-            $this->user,
-            $this->apiKey->exchange_id,
-            $year,
-            $month,
-            'spot_trade',
-            'partial',
-            0,
-            'A API Spot exige consulta por par; importe o CSV de Spot para confirmar a competência.',
-        );
-
-        return 'csv_required';
+        return array_values(array_unique(array_merge($this->accountAssets, $assetsFromTransactions)));
     }
 
     private function markDividendAsCsvRequired(int $year, int $month, bool $isCurrentMonth): string
@@ -451,10 +491,22 @@ public function runSmartImport(?int $year = null): array
             }
             $assetsFound = 0;
             foreach ($data['balances'] as $balance) {
-                CryptoAsset::firstOrCreate(['symbol' => $balance['asset']], ['name' => $balance['asset']]);
+                $symbol = strtoupper((string) ($balance['asset'] ?? ''));
+                if ($symbol === '') {
+                    continue;
+                }
+
+                CryptoAsset::firstOrCreate(['symbol' => $symbol], ['name' => $symbol]);
                 $assetsFound++;
+
+                if ((float) ($balance['free'] ?? 0) > 0 || (float) ($balance['locked'] ?? 0) > 0) {
+                    $this->accountAssets[] = $symbol;
+                }
             }
-            Log::info("✅ Total de ativos encontrados e atualizados: {$assetsFound}");
+            $this->accountAssets = array_values(array_unique($this->accountAssets));
+            Log::info("✅ Total de ativos encontrados e atualizados: {$assetsFound}", [
+                'ativos_com_saldo' => count($this->accountAssets),
+            ]);
         } catch (Exception $e) {
             Log::error("❌ Exceção ao buscar dados da conta: " . $e->getMessage());
             throw $e;
@@ -1035,153 +1087,61 @@ private function generateSnapshotsFromCryptoAssets(): void
     return array_unique($foundPairs);
 }
 
-   private function fetchMyTrades(string $symbol, int $startTime, int $endTime): array
-{
-    Log::info("   -> [fetchMyTrades] Iniciando busca por ID para o símbolo: {$symbol}");
-    Log::info("   -> [fetchMyTrades] Período: " . 
-        Carbon::createFromTimestampMs($startTime)->format('Y-m-d') . " até " . 
-        Carbon::createFromTimestampMs($endTime)->format('Y-m-d'));
-    
-    $allTrades = [];
-    $lastId = 0;
-    $loopCount = 0;
-    $tradesBeforeRange = 0;
-    $tradesAfterRange = 0;
-    $consecutiveEmptyBatches = 0;
+    /**
+     * Consulta somente o intervalo solicitado. A Binance limita esse endpoint
+     * a janelas de 24 horas, portanto o mês é dividido em dias e cada resposta
+     * é paginada por fromId quando necessário.
+     */
+    private function fetchMyTrades(string $symbol, int $startTime, int $endTime): array
+    {
+        $allTrades = [];
+        $cursor = Carbon::createFromTimestampMs($startTime, 'America/Sao_Paulo')->startOfDay();
+        $finalDay = Carbon::createFromTimestampMs($endTime, 'America/Sao_Paulo')->startOfDay();
 
-    while (true) {
-        $loopCount++;
-        
-        // Proteção contra loops infinitos
-        if ($loopCount > 1000) {
-            Log::warning("   -> [fetchMyTrades] Limite de 1000 iterações atingido. Parando por segurança.");
-            break;
-        }
-        
-        try {
-            $params = ['symbol' => $symbol, 'fromId' => $lastId, 'limit' => 1000];
-            $response = $this->signedRequest('/myTrades', $params);
+        while ($cursor->lessThanOrEqualTo($finalDay)) {
+            $dayStart = $cursor->copy()->startOfDay()->getTimestampMs();
+            $dayEnd = min($cursor->copy()->endOfDay()->getTimestampMs(), $endTime);
+            $fromId = null;
+            $pages = 0;
 
-            if ($response->successful()) {
-                $trades = $response->json();
+            do {
+                $params = [
+                    'symbol' => $symbol,
+                    'startTime' => $dayStart,
+                    'endTime' => $dayEnd,
+                    'limit' => 1000,
+                ];
+                if ($fromId !== null) {
+                    $params['fromId'] = $fromId;
+                }
 
-          Log::debug("   -> [fetchMyTrades] Lote recebido para {$symbol}: "
-             . count($trades) . " trades brutos (lastId {$lastId})");
+                $response = $this->signedRequest('/myTrades', $params);
+                if (!$response->successful()) {
+                    $error = $response->json() ?? ['message' => $response->body()];
+                    throw new Exception("Falha ao consultar Spot {$symbol}: " . json_encode($error));
+                }
 
-                
-                // Se não há mais trades, chegamos ao fim
-                if (empty($trades)) {
-                    Log::info("   -> [fetchMyTrades] Nenhum trade retornado. Fim do histórico.");
+                $trades = $response->json() ?? [];
+                $allTrades = array_merge($allTrades, $trades);
+                $pages++;
+
+                if (count($trades) < 1000 || $pages >= 100) {
                     break;
                 }
 
-                // Filtrar trades dentro do intervalo de tempo
-                $filteredTrades = [];
-                $batchTradesAfter = 0;
-                $batchTradesBefore = 0;
-                
-                foreach ($trades as $trade) {
-                    $tradeTime = $trade['time'];
-                    
-                    // Se o trade é anterior ao início do período
-                    if ($startTime > 0 && $tradeTime < $startTime) {
-                        $tradesBeforeRange++;
-                        $batchTradesBefore++;
-                        continue;
-                    }
-                    
-                    // Se o trade é posterior ao fim do período
-                    if ($endTime > 0 && $tradeTime > $endTime) {
-                        $tradesAfterRange++;
-                        $batchTradesAfter++;
-                        continue;
-                    }
-                    
-                    // Trade está dentro do período
-                    $filteredTrades[] = $trade;
-                }
-
-                // Adicionar trades filtrados ao resultado
-                $allTrades = array_merge($allTrades, $filteredTrades);
-                
-                // Atualizar lastId para próxima iteração
                 $lastTrade = end($trades);
-                $lastId = $lastTrade['id'] + 1;
+                $fromId = ((int) ($lastTrade['id'] ?? 0)) + 1;
+                usleep(150000);
+            } while (true);
 
-                // Log de progresso a cada 10 iterações
-                if ($loopCount % 10 === 0) {
-                    Log::info("   -> [fetchMyTrades] Iteração {$loopCount}: " . 
-                        count($allTrades) . " trades coletados até agora");
-                }
-
-                // LÓGICA CORRIGIDA DE PARADA:
-                
-                // 1. Se todos os trades deste lote estão DEPOIS do período
-                //    E já coletamos alguns trades válidos
-                //    Então provavelmente já passamos do período desejado
-                if ($batchTradesAfter > 0 && 
-                    $batchTradesAfter === count($trades) && 
-                    count($allTrades) > 0) {
-                    Log::info("   -> [fetchMyTrades] Todos os trades do lote estão após o período e já temos trades coletados. Parando.");
-                    break;
-                }
-                
-                // 2. Se não há trades filtrados neste lote
-                if (count($filteredTrades) === 0) {
-                    $consecutiveEmptyBatches++;
-                    
-                    // Se tivemos 3 lotes consecutivos sem trades válidos
-                    // E já coletamos alguns trades
-                    // Provavelmente já passamos do período
-                    if ($consecutiveEmptyBatches >= 3 && count($allTrades) > 0) {
-                        Log::info("   -> [fetchMyTrades] 3 lotes consecutivos sem trades válidos. Parando.");
-                        break;
-                    }
-                } else {
-                    // Reset do contador se encontramos trades válidos
-                    $consecutiveEmptyBatches = 0;
-                }
-
-                // 3. Se o lote retornou menos de 1000 trades, chegamos ao fim do histórico
-                if (count($trades) < 1000) {
-                    Log::info("   -> [fetchMyTrades] Lote com menos de 1000 trades. Fim do histórico.");
-                    break;
-                }
-                
-            } else {
-                $error = $response->json() ?? ['code' => 'N/A', 'msg' => $response->body()];
-                
-                if (isset($error['code']) && $error['code'] == -1121) {
-                    Log::info("   -> [fetchMyTrades] Símbolo {$symbol} inválido. Fim da busca.");
-                } else {
-                    Log::error("   -> [fetchMyTrades] Falha na API para {$symbol}. Parando.", [
-                        'status' => $response->status(), 
-                        'error' => $error
-                    ]);
-                }
-                break;
-            }
-            
-        } catch (Exception $e) {
-            Log::error("   -> [fetchMyTrades] Exceção para {$symbol}. Parando.", [
-                'error' => $e->getMessage()
-            ]);
-            break;
+            $cursor->addDay();
+            usleep(100000);
         }
-        
-        // Rate limiting: aguardar 250ms entre requisições
-        usleep(250000);
+
+        Log::info("   -> [fetchMyTrades] {$symbol}: " . count($allTrades) . ' trades encontrados no intervalo solicitado.');
+
+        return $allTrades;
     }
-    
-    // Log final
-    Log::info("   -> [fetchMyTrades] Busca para {$symbol} concluída:");
-    Log::info("      - Total de iterações: {$loopCount}");
-    Log::info("      - Trades no período: " . count($allTrades));
-    Log::info("      - Trades antes do período: {$tradesBeforeRange}");
-    Log::info("      - Trades depois do período: {$tradesAfterRange}");
-    
-    return $allTrades;
-}
 
     private function signedRequest(string $endpoint, array $params = []): \Illuminate\Http\Client\Response
     {
@@ -1242,35 +1202,11 @@ private function generateSnapshotsFromCryptoAssets(): void
         $fromAssetId = CryptoAsset::firstOrCreate(['symbol' => $fromAsset], ['name' => $fromAsset])->id;
         $toAssetId = CryptoAsset::firstOrCreate(['symbol' => $toAsset], ['name' => $toAsset])->id;
 
+        // Gravar primeiro. O job VerifyZeroValueTransactionsJob enriquece
+        // total_usdt e total_brl depois, sem travar a sincronização Spot quando
+        // um ativo não tiver par histórico vigente.
         $totalUsdt = 0.0;
         $totalBrl = 0.0;
-        $stablecoins = ['USDT', 'BUSD', 'TUSD', 'FDUSD', 'USDC'];
-
-        if (in_array($quoteAsset, $stablecoins)) {
-            $totalUsdt = (float)$trade['quoteQty'];
-            $totalBrl = $this->calculateTotalBrl($totalUsdt, $date);
-        } elseif ($quoteAsset === 'BRL') {
-            $totalBrl = (float)$trade['quoteQty'];
-            if (in_array($baseAsset, $stablecoins)) {
-                $totalUsdt = (float)$trade['qty'];
-            } else {
-                $totalUsdt = $this->calculateTotalUsdt($baseAsset, (float)$trade['qty'], $date);
-            }
-        } else {
-            $quotePrices = $this->getHistoricalPrice($quoteAsset, $date);
-            if ($quotePrices['price_usd'] > 0) {
-                $totalUsdt = (float)$trade['quoteQty'] * $quotePrices['price_usd'];
-                $totalBrl = $this->calculateTotalBrl($totalUsdt, $date);
-            } else {
-                $assetPrices = $this->getHistoricalPrice($toAsset, $date);
-                if ($assetPrices['price_usd'] > 0) {
-                    $totalUsdt = $assetPrices['price_usd'] * $toAmount;
-                    $totalBrl = $this->calculateTotalBrl($totalUsdt, $date);
-                } else {
-                    Log::warning("   -> [saveSpotTrade] Não foi possível obter preço para {$baseAsset}/{$quoteAsset} em {$date->toDateString()}. Valores permanecerão como 0.");
-                }
-            }
-        }
 
         Transaction::updateOrCreate(
             ['user_id' => $this->user->id, 'reference' => $trade['id']],

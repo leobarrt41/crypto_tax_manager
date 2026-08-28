@@ -15,7 +15,7 @@ Orientar a sincronização fiscal incremental, com a API como fonte para os even
 
 | Evento | Endpoint/documentação | Limite relevante | Decisão de produto |
 |---|---|---|---|
-| Trades Spot | `GET /api/v3/myTrades` | exige `symbol`; até 1.000 por chamada; consultas por intervalo devem ter no máximo 24 horas | O sistema marca como **cobertura parcial** e pede CSV de Spot, pois não é seguro afirmar cobertura integral sem um catálogo histórico de pares |
+| Trades Spot | `GET /api/v3/myTrades` | exige `symbol`; até 1.000 por chamada; consultas por intervalo devem ter no máximo 24 horas | O sistema consulta pares ativos derivados de saldos e histórico já cadastrado, importa os trades encontrados e registra **cobertura parcial**; o CSV de Spot continua necessário para a conferência integral |
 | Convert | `GET /sapi/v1/convert/tradeFlow` | o serviço atual divide consultas em janelas de até 89 dias | Importado automaticamente por competência e registrado como coberto quando a consulta conclui |
 | Depósitos | `GET /sapi/v1/capital/deposit/hisrec` | janela máxima de 90 dias e paginação até 1.000 itens | Importado automaticamente por competência e registrado como coberto quando a consulta conclui |
 | Saques | `GET /sapi/v1/capital/withdraw/history` | janela máxima de 90 dias e paginação até 1.000 itens | Importado automaticamente por competência e registrado como coberto quando a consulta conclui |

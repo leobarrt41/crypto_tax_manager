@@ -49,6 +49,24 @@ class TransactionImportCoverageService
             ->exists();
     }
 
+    /**
+     * Spot é sempre parcial, mas uma consulta já concluída não deve ser repetida
+     * em competências históricas sem uma solicitação explícita de reprocessamento.
+     */
+    public function wasApiChecked(User $user, int $exchangeId, int $year, int $month, string $eventType): bool
+    {
+        return TransactionImportCoverage::query()
+            ->where([
+                'user_id' => $user->id,
+                'exchange_id' => $exchangeId,
+                'year' => $year,
+                'month' => $month,
+                'event_type' => $eventType,
+            ])
+            ->whereIn('api_status', ['completed', 'partial'])
+            ->exists();
+    }
+
     public function recordCsvCoverage(
         User $user,
         int $exchangeId,
