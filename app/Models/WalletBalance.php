@@ -26,6 +26,14 @@ class WalletBalance extends Model
     }
 
     /**
+     * Ativo correspondente ao símbolo retornado pela carteira/exchange.
+     */
+    public function cryptoAsset()
+    {
+        return $this->belongsTo(CryptoAsset::class, 'asset', 'symbol');
+    }
+
+    /**
      * Relacionamento indireto com o usuário (via carteira).
      */
     public function user()
@@ -51,4 +59,3 @@ class WalletBalance extends Model
     });
 }
 }
-

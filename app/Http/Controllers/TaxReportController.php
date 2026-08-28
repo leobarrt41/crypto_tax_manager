@@ -36,7 +36,7 @@ class TaxReportController extends Controller
         // Isso permite cadastrar e consultar o estoque de abertura mesmo antes
         // de o recálculo ter gerado um resumo fiscal para o ano.
         $transactionYears = \App\Models\Transaction::where('user_id', $user->id)
-            ->selectRaw('YEAR(date) as year')
+            ->selectRaw('EXTRACT(YEAR FROM date) as year')
             ->distinct()
             ->pluck('year')
             ->toArray();

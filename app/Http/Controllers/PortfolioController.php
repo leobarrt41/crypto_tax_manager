@@ -93,9 +93,12 @@ class PortfolioController extends Controller
         $asset = CryptoAsset::where('symbol', strtoupper($symbol))->firstOrFail();
 
         $transactions = auth()->user()->transactions()
-            ->where('crypto_asset_id', $asset->id)
-            ->with(['wallet'])
-            ->orderBy('executed_at', 'desc')
+            ->where(function ($query) use ($asset) {
+                $query->where('from_asset', $asset->symbol)
+                    ->orWhere('to_asset', $asset->symbol);
+            })
+            ->with(['fromCryptoAsset', 'toCryptoAsset', 'source'])
+            ->orderByRaw('COALESCE(executed_at, date) DESC')
             ->paginate(20);
 
         $balance = $this->getAssetBalance($asset);
@@ -121,7 +124,7 @@ class PortfolioController extends Controller
         ]);
 
         $query = auth()->user()->transactions()
-            ->with(['cryptoAsset']);
+            ->with(['fromCryptoAsset', 'toCryptoAsset', 'source']);
 
         if (isset($validated['start_date'])) {
             $query->where('executed_at', '>=', $validated['start_date']);
@@ -132,7 +135,11 @@ class PortfolioController extends Controller
         }
 
         if (isset($validated['asset_id'])) {
-            $query->where('crypto_asset_id', $validated['asset_id']);
+            $symbol = CryptoAsset::findOrFail($validated['asset_id'])->symbol;
+            $query->where(function ($query) use ($symbol) {
+                $query->where('from_asset', $symbol)
+                    ->orWhere('to_asset', $symbol);
+            });
         }
 
         $transactions = $query->orderBy('executed_at')->get();
@@ -186,8 +193,8 @@ class PortfolioController extends Controller
 
             if ($validated['include_transactions'] ?? false) {
                 $data['transactions'] = auth()->user()->transactions()
-                    ->with(['cryptoAsset', 'wallet'])
-                    ->orderBy('executed_at', 'desc')
+                    ->with(['fromCryptoAsset', 'toCryptoAsset', 'source'])
+                    ->orderByRaw('COALESCE(executed_at, date) DESC')
                     ->get();
             }
 
@@ -217,7 +224,7 @@ class PortfolioController extends Controller
     {
         $balances = auth()->user()->walletBalances()
             ->with(['cryptoAsset', 'wallet'])
-            ->where('balance', '>', 0)
+            ->whereRaw('(available + locked) > 0')
             ->get();
 
         $totalValue = 0;
@@ -225,18 +232,20 @@ class PortfolioController extends Controller
         $assets = [];
 
         foreach ($balances as $balance) {
-            $currentPrice = $balance->cryptoAsset->current_price ?? 0;
-            $value = $balance->balance * $currentPrice;
+            $asset = $balance->cryptoAsset;
+            $quantity = (float) $balance->total;
+            $currentPrice = (float) ($asset?->current_price_brl ?? 0);
+            $value = $quantity * $currentPrice;
             $totalValue += $value;
 
             // Calcular valor investido (implementar lógica FIFO)
-            $invested = $this->calculateInvestedAmount($balance->cryptoAsset, $balance->balance);
+            $invested = $asset ? $this->calculateInvestedAmount($asset, $quantity) : 0;
             $totalInvested += $invested;
 
             $assets[] = [
-                'symbol' => $balance->cryptoAsset->symbol,
-                'name' => $balance->cryptoAsset->name,
-                'balance' => $balance->balance,
+                'symbol' => $asset?->symbol ?? $balance->asset,
+                'name' => $asset?->name ?? $balance->asset,
+                'balance' => $quantity,
                 'current_price' => $currentPrice,
                 'value' => $value,
                 'invested' => $invested,
@@ -261,8 +270,8 @@ class PortfolioController extends Controller
     private function getRecentTransactions($limit = 10)
     {
         return auth()->user()->transactions()
-            ->with(['cryptoAsset', 'wallet'])
-            ->orderBy('executed_at', 'desc')
+            ->with(['fromCryptoAsset', 'toCryptoAsset', 'source'])
+            ->orderByRaw('COALESCE(executed_at, date) DESC')
             ->limit($limit)
             ->get();
     }
@@ -274,17 +283,19 @@ class PortfolioController extends Controller
     {
         $balances = auth()->user()->walletBalances()
             ->with(['cryptoAsset'])
-            ->where('balance', '>', 0)
+            ->whereRaw('(available + locked) > 0')
             ->get();
 
         $assets = $balances->map(function ($balance) {
-            $currentPrice = $balance->cryptoAsset->current_price ?? 0;
-            $value = $balance->balance * $currentPrice;
+            $asset = $balance->cryptoAsset;
+            $quantity = (float) $balance->total;
+            $currentPrice = (float) ($asset?->current_price_brl ?? 0);
+            $value = $quantity * $currentPrice;
 
             return [
-                'symbol' => $balance->cryptoAsset->symbol,
-                'name' => $balance->cryptoAsset->name,
-                'balance' => $balance->balance,
+                'symbol' => $asset?->symbol ?? $balance->asset,
+                'name' => $asset?->name ?? $balance->asset,
+                'balance' => $quantity,
                 'value' => $value
             ];
         })->sortByDesc('value')->take($limit)->values();
@@ -352,13 +363,14 @@ class PortfolioController extends Controller
     private function getAssetBalance($asset)
     {
         $balance = auth()->user()->walletBalances()
-            ->where('crypto_asset_id', $asset->id)
-            ->sum('balance');
+            ->where('asset', $asset->symbol)
+            ->selectRaw('COALESCE(SUM(available + locked), 0) as total')
+            ->value('total');
 
         return [
             'total_balance' => $balance,
-            'current_price' => $asset->current_price ?? 0,
-            'total_value' => $balance * ($asset->current_price ?? 0)
+            'current_price' => $asset->current_price_brl ?? 0,
+            'total_value' => $balance * ($asset->current_price_brl ?? 0)
         ];
     }
 
@@ -430,4 +442,3 @@ class PortfolioController extends Controller
         return 0;
     }
 }
-

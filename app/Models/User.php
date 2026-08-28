@@ -8,6 +8,7 @@ use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasManyThrough;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Carbon\Carbon;
@@ -151,9 +152,9 @@ class User extends Authenticatable
     /**
      * Saldos das carteiras
      */
-    public function walletBalances(): HasMany
+    public function walletBalances(): HasManyThrough
     {
-        return $this->hasMany(WalletBalance::class);
+        return $this->hasManyThrough(WalletBalance::class, Wallet::class);
     }
 
     // ===== RELACIONAMENTOS COM FILTROS =====
@@ -290,8 +291,8 @@ class User extends Authenticatable
     public function getTotalPortfolioValue(): float
     {
         return $this->walletBalances()
-            ->join('crypto_assets', 'wallet_balances.crypto_asset_id', '=', 'crypto_assets.id')
-            ->selectRaw('SUM(wallet_balances.balance * crypto_assets.current_price_brl) as total')
+            ->join('crypto_assets', 'wallet_balances.asset', '=', 'crypto_assets.symbol')
+            ->selectRaw('SUM((wallet_balances.available + wallet_balances.locked) * crypto_assets.current_price_brl) as total')
             ->value('total') ?? 0;
     }
 
