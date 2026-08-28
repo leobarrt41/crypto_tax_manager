@@ -312,6 +312,17 @@ const formatDate = (value) => {
 const asFiniteNumber = (value) => Number.isFinite(Number(value)) ? Number(value) : null
 const getAssetColor = (index) => ['#3B82F6', '#EF4444', '#10B981', '#F59E0B', '#8B5CF6', '#06B6D4', '#F97316', '#84CC16'][index % 8]
 const getActivityTypeLabel = (type) => ({ buy: 'Compra de', sell: 'Venda de', deposit: 'Depósito de', withdrawal: 'Saque de', trade: 'Trade de', convert: 'Conversão de', swap: 'Swap de', reward: 'Recompensa em', airdrop: 'Airdrop de' }[type] || 'Movimentação de')
+const getActivityTypeClass = (type) => ({
+  buy: 'bg-green-600',
+  deposit: 'bg-green-600',
+  reward: 'bg-green-600',
+  airdrop: 'bg-green-600',
+  sell: 'bg-red-600',
+  withdrawal: 'bg-red-600',
+  trade: 'bg-blue-600',
+  convert: 'bg-purple-600',
+  swap: 'bg-purple-600',
+}[String(type || '').toLowerCase()] || 'bg-gray-500')
 </script>
 
 <style scoped>

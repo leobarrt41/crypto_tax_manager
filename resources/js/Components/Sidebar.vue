@@ -63,17 +63,74 @@
           </Link>
         </li>
 
+        <!-- Separador -->
+        <li class="border-t border-gray-200 my-4"></li>
+
         <!-- Trading Bot -->
         <li>
-          <Link 
-            href="/trading-bot" 
+          <div class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2 px-3">
+            Trading Bot
+          </div>
+        </li>
+
+        <li>
+          <Link
+            href="/trading-bot"
             class="nav-item flex items-center p-3 rounded-lg transition-colors"
             :class="isActive('/trading-bot') ? 'bg-primary text-white' : 'text-gray-700 hover:bg-gray-100'"
           >
             <svg class="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"></path>
             </svg>
-            Trading Bot
+            Visão Geral
+          </Link>
+        </li>
+
+        <li>
+          <Link
+            href="/trading-strategies"
+            class="nav-item flex items-center p-3 rounded-lg transition-colors"
+            :class="isActive('/trading-strategies') ? 'bg-primary text-white' : 'text-gray-700 hover:bg-gray-100'"
+          >
+            <svg class="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4v2m0-6V4m12 14a2 2 0 100-4m0 4v2m0-6V4"></path>
+            </svg>
+            Configuração da Estratégia
+          </Link>
+        </li>
+
+        <li class="nav-item flex items-center p-3 rounded-lg text-gray-400 cursor-not-allowed" title="Página ainda não disponível">
+          <svg class="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+          </svg>
+          <span>Backtesting</span>
+          <span class="ml-auto text-[10px] uppercase">Em breve</span>
+        </li>
+
+        <li class="px-3 pt-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">Operações</li>
+
+        <li class="nav-item flex items-center py-2 pl-11 pr-3 rounded-lg text-sm text-gray-400 cursor-not-allowed" title="Página ainda não disponível">
+          <span>Criar Operação</span>
+          <span class="ml-auto text-[10px] uppercase">Em breve</span>
+        </li>
+
+        <li>
+          <Link
+            href="/bot-orders"
+            class="nav-item flex items-center py-2 pl-11 pr-3 rounded-lg text-sm transition-colors"
+            :class="isActive('/bot-orders') ? 'bg-primary text-white' : 'text-gray-700 hover:bg-gray-100'"
+          >
+            Operações Ativas
+          </Link>
+        </li>
+
+        <li>
+          <Link
+            href="/trading-logs"
+            class="nav-item flex items-center py-2 pl-11 pr-3 rounded-lg text-sm transition-colors"
+            :class="isActive('/trading-logs') ? 'bg-primary text-white' : 'text-gray-700 hover:bg-gray-100'"
+          >
+            Histórico
           </Link>
         </li>
 
