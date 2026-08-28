@@ -24,17 +24,21 @@ class BinanceImportService
     protected User $user;
     protected UserApiKey $apiKey;
     protected BinanceConvertService $convertService;
+    protected TransactionImportCoverageService $coverageService;
     protected string $baseUrl = 'https://api.binance.com/api/v3';
+    protected string $sapiBaseUrl = 'https://api.binance.com';
 
-    public function __construct(User $user)
+    public function __construct(User $user, ?int $apiKeyId = null)
     {
         $this->user = $user;
         $this->apiKey = UserApiKey::where('user_id', $this->user->id)
             ->whereHas('exchange', function ($q) {
                 return $q->where('name', 'binance');
             })
+            ->when($apiKeyId !== null, fn ($query) => $query->whereKey($apiKeyId))
             ->firstOrFail();
         $this->convertService = new BinanceConvertService($this->apiKey);
+        $this->coverageService = app(TransactionImportCoverageService::class);
         Log::info("[BinanceImportService] Serviço inicializado para o usuário: {$this->user->id}");
     }
 
@@ -42,96 +46,53 @@ class BinanceImportService
     // PONTO DE ENTRADA PRINCIPAL
     // ===================================================================
 
-public function runSmartImport(): array
+public function runSmartImport(?int $year = null): array
 {
-    Log::info("======================================================================");
-    Log::info("🚀 [IMPORTAÇÃO INTELIGENTE] Iniciando processo completo...");
-    Log::info("======================================================================");
-    
+    $year ??= now('America/Sao_Paulo')->year;
+    $currentYear = now('America/Sao_Paulo')->year;
+
+    if ($year < 2009 || $year > $currentYear) {
+        throw new \InvalidArgumentException('O ano selecionado para sincronização é inválido.');
+    }
+
+    Log::info('[Binance] Iniciando sincronização anual incremental.', [
+        'user_id' => $this->user->id,
+        'api_key_id' => $this->apiKey->id,
+        'year' => $year,
+    ]);
+
     try {
-        // ===================================================================
-        // FASE 0: PREPARAÇÃO
-        // ===================================================================
-        Log::info("");
-        Log::info("📋 Executando Fase 0: Preparação...");
+        // O catálogo é atualizado, mas os snapshots antigos não são apagados nem reconstruídos.
         $this->prepareImport();
-        Log::info("✅ Fase 0 concluída!");
-        
-        // ===================================================================
-        // FASE 1: DESCOBERTA INTELIGENTE
-        // ===================================================================
-        Log::info("");
-        Log::info("🗺️ Executando Fase 1: Descoberta Inteligente...");
-        $this->ensureSnapshotsExist();
-        Log::info("✅ Fase 1 concluída!");
-        
-        // ===================================================================
-        // FASE 2: IMPORTAÇÃO GUIADA
-        // ===================================================================
-        Log::info("");
-        Log::info("🚚 Executando Fase 2: Importação Guiada...");
-        $importResult = $this->runGuidedImport();
-        
-        if (!$importResult['success']) {
-            Log::error("❌ Fase 2 falhou: " . ($importResult['message'] ?? 'Erro desconhecido'));
-            return $importResult;
-        }
-        
-        Log::info("✅ Fase 2 concluída!");
-        
-        // ===================================================================
-        // FASE 3: VERIFICAÇÃO DE VALORES ZERO
-        // ===================================================================
-        Log::info("");
-        Log::info("🔍 Executando Fase 3: Verificação de Valores Zero...");
-        
-        // Despachar o job para a fila
+        $importResult = $this->runAnnualIncrementalImport($year);
+
         VerifyZeroValueTransactionsJob::dispatch(
             $this->user->id,
             $this->apiKey->exchange_id,
-            true // Enviar notificação ao usuário após a conclusão
+            true,
         )->onQueue('default');
-        
-        Log::info("✅ Fase 3 agendada para execução em background!");
-        
-        // ===================================================================
-        // RESULTADO FINAL
-        // ===================================================================
-        Log::info("");
-        Log::info("======================================================================");
-        Log::info("🎉 [IMPORTAÇÃO INTELIGENTE] Processo completo concluído com sucesso!");
-        Log::info("======================================================================");
-        Log::info("📊 Resumo:");
-        Log::info("   - Trades importados: " . ($importResult['trades_imported'] ?? 0));
-        Log::info("   - Conversões importadas: " . ($importResult['conversions_imported'] ?? 0));
-        Log::info("   - Meses processados: " . ($importResult['months_processed'] ?? 0));
-        
-        if (isset($importResult['months_failed']) && $importResult['months_failed'] > 0) {
-            Log::warning("   - Meses com falhas: " . $importResult['months_failed']);
-        }
-        
-        Log::info("   - Verificação de valores zero: Agendada");
-        Log::info("======================================================================");
-        
-        // Adicionar informação sobre verificação ao resultado
-        $importResult['verification'] = [
-            'status' => 'scheduled',
-            'message' => 'A verificação de transações foi agendada e será executada em background.'
+
+        return [
+            'success' => true,
+            'year' => $year,
+            ...$importResult,
+            'verification' => [
+                'status' => 'scheduled',
+                'message' => 'A verificação de preços pendentes foi agendada.',
+            ],
         ];
-        
-        return $importResult;
-        
-    } catch (Exception $e) {
-        Log::error("======================================================================");
-        Log::error("❌ [IMPORTAÇÃO INTELIGENTE] Erro fatal durante o processo");
-        Log::error("======================================================================");
-        Log::error("Erro: " . $e->getMessage());
-        Log::error("Trace: " . $e->getTraceAsString());
-        
+    } catch (\Throwable $exception) {
+        Log::error('[Binance] Falha na sincronização anual incremental.', [
+            'user_id' => $this->user->id,
+            'api_key_id' => $this->apiKey->id,
+            'year' => $year,
+            'error' => $exception->getMessage(),
+        ]);
+
         return [
             'success' => false,
-            'message' => 'Erro durante a importação: ' . $e->getMessage(),
-            'error' => $e->getMessage()
+            'year' => $year,
+            'message' => 'Erro durante a sincronização: ' . $exception->getMessage(),
         ];
     }
 }
@@ -147,8 +108,258 @@ public function runSmartImport(): array
         Log::info("======================================================================");
         $this->syncExchangeCatalog();
         $this->updateCryptoAssetsFromBinance();
-        $this->clearOldSnapshots();
-        Log::info("✅ [Fase 0: Preparação] Concluída!");
+        Log::info("✅ [Fase 0: Preparação] Concluída sem reconstruir snapshots históricos.");
+    }
+
+    /**
+     * Sincroniza somente o ano selecionado. Competências já confirmadas pela API
+     * são puladas, exceto o mês em curso, que pode receber eventos atrasados.
+     */
+    private function runAnnualIncrementalImport(int $year): array
+    {
+        $now = now('America/Sao_Paulo');
+        $lastMonth = $year === $now->year ? $now->month : 12;
+        $result = [
+            'months_processed' => 0,
+            'months_skipped' => 0,
+            'conversions_imported' => 0,
+            'deposits_imported' => 0,
+            'withdrawals_imported' => 0,
+            'months' => [],
+        ];
+
+        for ($month = 1; $month <= $lastMonth; $month++) {
+            $monthStart = Carbon::create($year, $month, 1, 0, 0, 0, 'America/Sao_Paulo')->startOfMonth();
+            $monthEnd = $monthStart->copy()->endOfMonth();
+            $isCurrentMonth = $year === $now->year && $month === $now->month;
+            $monthResult = [
+                'month' => $month,
+                'label' => $monthStart->format('m/Y'),
+                'events' => [],
+            ];
+
+            $monthResult['events']['spot_trade'] = $this->markSpotAsCsvRequired($year, $month, $isCurrentMonth);
+            $monthResult['events']['asset_dividend'] = $this->markDividendAsCsvRequired($year, $month, $isCurrentMonth);
+
+            foreach ([
+                'convert' => fn () => $this->importConversionsForMonth($monthStart, $monthEnd),
+                'deposit' => fn () => $this->importDepositsForMonth($monthStart, $monthEnd),
+                'withdrawal' => fn () => $this->importWithdrawalsForMonth($monthStart, $monthEnd),
+            ] as $eventType => $importer) {
+                if (!$isCurrentMonth && $this->coverageService->wasApiCovered($this->user, $this->apiKey->exchange_id, $year, $month, $eventType)) {
+                    $result['months_skipped']++;
+                    $monthResult['events'][$eventType] = 'skipped';
+                    continue;
+                }
+
+                try {
+                    $imported = $importer();
+                    $this->coverageService->recordApiCoverage(
+                        $this->user,
+                        $this->apiKey->exchange_id,
+                        $year,
+                        $month,
+                        $eventType,
+                        'completed',
+                        $imported,
+                    );
+                    $monthResult['events'][$eventType] = 'completed';
+                    $result[$eventType === 'convert' ? 'conversions_imported' : $eventType . 's_imported'] += $imported;
+                } catch (\Throwable $exception) {
+                    $this->coverageService->recordApiCoverage(
+                        $this->user,
+                        $this->apiKey->exchange_id,
+                        $year,
+                        $month,
+                        $eventType,
+                        'failed',
+                        0,
+                        $exception->getMessage(),
+                    );
+                    $monthResult['events'][$eventType] = 'failed';
+                }
+            }
+
+            $result['months'][] = $monthResult;
+            $result['months_processed']++;
+        }
+
+        return $result;
+    }
+
+    private function markSpotAsCsvRequired(int $year, int $month, bool $isCurrentMonth): string
+    {
+        if (!$isCurrentMonth && $this->coverageService->wasApiCovered($this->user, $this->apiKey->exchange_id, $year, $month, 'spot_trade')) {
+            return 'skipped';
+        }
+
+        // A API oficial exige um símbolo por consulta. Sem uma lista histórica
+        // completa de pares não é seguro declarar o mês Spot como coberto.
+        $this->coverageService->recordApiCoverage(
+            $this->user,
+            $this->apiKey->exchange_id,
+            $year,
+            $month,
+            'spot_trade',
+            'partial',
+            0,
+            'A API Spot exige consulta por par; importe o CSV de Spot para confirmar a competência.',
+        );
+
+        return 'csv_required';
+    }
+
+    private function markDividendAsCsvRequired(int $year, int $month, bool $isCurrentMonth): string
+    {
+        if (!$isCurrentMonth && $this->coverageService->wasApiCovered($this->user, $this->apiKey->exchange_id, $year, $month, 'asset_dividend')) {
+            return 'skipped';
+        }
+
+        // Dividendos, airdrops, staking e Simple Earn possuem classificações
+        // fiscais distintas. O arquivo da Binance é a fonte de conferência.
+        $this->coverageService->recordApiCoverage(
+            $this->user,
+            $this->apiKey->exchange_id,
+            $year,
+            $month,
+            'asset_dividend',
+            'partial',
+            0,
+            'Importe o CSV de dividendos, Earn, staking e recompensas para classificar os créditos corretamente.',
+        );
+
+        return 'csv_required';
+    }
+
+    private function importDepositsForMonth(Carbon $monthStart, Carbon $monthEnd): int
+    {
+        $records = $this->fetchCapitalHistory('/sapi/v1/capital/deposit/hisrec', $monthStart, $monthEnd);
+        $imported = 0;
+
+        foreach ($records as $record) {
+            if ((int) ($record['status'] ?? -1) !== 1) {
+                continue;
+            }
+
+            $this->saveDeposit($record);
+            $imported++;
+        }
+
+        return $imported;
+    }
+
+    private function importWithdrawalsForMonth(Carbon $monthStart, Carbon $monthEnd): int
+    {
+        $records = $this->fetchCapitalHistory('/sapi/v1/capital/withdraw/history', $monthStart, $monthEnd);
+        $imported = 0;
+
+        foreach ($records as $record) {
+            if ((int) ($record['status'] ?? -1) !== 6) {
+                continue;
+            }
+
+            $this->saveWithdrawal($record);
+            $imported++;
+        }
+
+        return $imported;
+    }
+
+    private function fetchCapitalHistory(string $endpoint, Carbon $monthStart, Carbon $monthEnd): array
+    {
+        $offset = 0;
+        $allRecords = [];
+
+        do {
+            $response = $this->signedSapiRequest($endpoint, [
+                'startTime' => $monthStart->getTimestampMs(),
+                'endTime' => $monthEnd->getTimestampMs(),
+                'offset' => $offset,
+                'limit' => 1000,
+            ]);
+
+            if (!$response->successful()) {
+                throw new Exception("Falha na consulta Binance {$endpoint}: {$response->body()}");
+            }
+
+            $records = $response->json() ?? [];
+            if (!is_array($records)) {
+                throw new Exception("Resposta inesperada da Binance para {$endpoint}.");
+            }
+
+            $allRecords = array_merge($allRecords, $records);
+            $offset += count($records);
+        } while (count($records) === 1000);
+
+        return $allRecords;
+    }
+
+    private function saveDeposit(array $record): void
+    {
+        $asset = strtoupper((string) ($record['coin'] ?? ''));
+        $amount = (float) ($record['amount'] ?? 0);
+        $timestamp = $record['completeTime'] ?? $record['insertTime'] ?? null;
+
+        if (!$asset || $amount <= 0 || !$timestamp) {
+            return;
+        }
+
+        $date = Carbon::createFromTimestampMs((int) $timestamp);
+        $assetId = CryptoAsset::firstOrCreate(['symbol' => $asset], ['name' => $asset])->id;
+        $totalUsdt = $this->calculateTotalUsdt($asset, $amount, $date);
+
+        Transaction::updateOrCreate(
+            ['user_id' => $this->user->id, 'reference' => (string) ($record['id'] ?? $record['txId'])],
+            [
+                'source_type' => UserApiKey::class,
+                'source_id' => $this->apiKey->id,
+                'type' => 'deposit',
+                'operation' => 'entrada',
+                'to_asset' => $asset,
+                'to_amount' => $amount,
+                'to_crypto_asset_id' => $assetId,
+                'total_usdt' => $totalUsdt,
+                'total_brl' => $this->calculateTotalBrl($totalUsdt, $date),
+                'txid' => $record['txId'] ?? null,
+                'date' => $date,
+                'source' => 'binance_deposit_api',
+            ],
+        );
+    }
+
+    private function saveWithdrawal(array $record): void
+    {
+        $asset = strtoupper((string) ($record['coin'] ?? ''));
+        $amount = (float) ($record['amount'] ?? 0);
+        $timestamp = $record['completeTime'] ?? $record['applyTime'] ?? null;
+
+        if (!$asset || $amount <= 0 || !$timestamp) {
+            return;
+        }
+
+        $date = is_numeric($timestamp)
+            ? Carbon::createFromTimestampMs((int) $timestamp)
+            : Carbon::parse($timestamp, 'America/Sao_Paulo');
+        $assetId = CryptoAsset::firstOrCreate(['symbol' => $asset], ['name' => $asset])->id;
+        $totalUsdt = $this->calculateTotalUsdt($asset, $amount, $date);
+
+        Transaction::updateOrCreate(
+            ['user_id' => $this->user->id, 'reference' => (string) ($record['id'] ?? $record['txId'])],
+            [
+                'source_type' => UserApiKey::class,
+                'source_id' => $this->apiKey->id,
+                'type' => 'withdrawal',
+                'operation' => 'saida',
+                'from_asset' => $asset,
+                'from_amount' => $amount,
+                'from_crypto_asset_id' => $assetId,
+                'total_usdt' => $totalUsdt,
+                'total_brl' => $this->calculateTotalBrl($totalUsdt, $date),
+                'txid' => $record['txId'] ?? null,
+                'date' => $date,
+                'source' => 'binance_withdrawal_api',
+            ],
+        );
     }
 
     private function syncExchangeCatalog(): void
@@ -701,16 +912,16 @@ private function generateSnapshotsFromCryptoAssets(): void
 
     private function importConversionsForMonth(Carbon $monthStart, Carbon $monthEnd): int
     {
-        try {
-            $conversions = $this->convertService->getConvertHistory($monthStart->getTimestampMs(), $monthEnd->getTimestampMs());
-            foreach ($conversions as $conv) {
-                $this->saveConversion($conv);
-            }
-            return count($conversions);
-        } catch (Exception $e) {
-            Log::error("❌ Erro ao importar conversões: " . $e->getMessage());
-            return 0;
+        $conversions = $this->convertService->getConvertHistory(
+            $monthStart->getTimestampMs(),
+            $monthEnd->getTimestampMs(),
+        );
+
+        foreach ($conversions as $conversion) {
+            $this->saveConversion($conversion);
         }
+
+        return count($conversions);
     }
 
     private function buildSymbolsFromAssets(array $assets): array
@@ -970,34 +1181,32 @@ private function generateSnapshotsFromCryptoAssets(): void
 }
 
     private function signedRequest(string $endpoint, array $params = []): \Illuminate\Http\Client\Response
-{
-    // Adicionar timestamp se não existir
-    if (!isset($params['timestamp'])) {
-        $params['timestamp'] = (int)(microtime(true) * 1000);
+    {
+        return $this->signedGet($this->baseUrl . $endpoint, $params);
     }
-    
-    // Adicionar janela de recebimento se não existir
-    if (!isset($params['recvWindow'])) {
-        $params['recvWindow'] = 60000; // 60 segundos
+
+    private function signedSapiRequest(string $endpoint, array $params = []): \Illuminate\Http\Client\Response
+    {
+        return $this->signedGet($this->sapiBaseUrl . $endpoint, $params);
     }
-    
-    // Construir query string para assinatura
-    $queryString = http_build_query($params, '', '&');
-    
-    // Gerar assinatura HMAC SHA256
-    $signature = hash_hmac('sha256', $queryString, $this->apiKey->secret_key);
-    
-    // Adicionar assinatura aos parâmetros
-    $params['signature'] = $signature;
-    
-    // Construir URL completa
-    $requestUrl = $this->baseUrl . $endpoint;
-    
-    // Fazer requisição com header de API Key
-    return Http::withHeaders([
-        'X-MBX-APIKEY' => $this->apiKey->api_key
-    ])->get($requestUrl, $params);
-}
+
+    private function signedGet(string $requestUrl, array $params = []): \Illuminate\Http\Client\Response
+    {
+        if (!isset($params['timestamp'])) {
+            $params['timestamp'] = (int) (microtime(true) * 1000);
+        }
+
+        if (!isset($params['recvWindow'])) {
+            $params['recvWindow'] = 60000;
+        }
+
+        $queryString = http_build_query($params, '', '&');
+        $params['signature'] = hash_hmac('sha256', $queryString, $this->apiKey->secret_key);
+
+        return Http::withHeaders([
+            'X-MBX-APIKEY' => $this->apiKey->api_key,
+        ])->get($requestUrl, $params);
+    }
 
     // ===================================================================
     // MÉTODOS DE SALVAMENTO E CÁLCULO DE PREÇO

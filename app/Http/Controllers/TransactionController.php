@@ -15,6 +15,7 @@ use App\Models\CryptoAsset;
 use App\Services\FifoCalculatorService;
 use App\Services\BinanceImportService; // ✅ Importa o novo serviço
 use App\Services\CryptoPriceService;
+use App\Services\TransactionImportCoverageService;
 use Exception;
 use Carbon\Carbon; // Necessário para a reconstrução de saldos
 use OpenSpout\Reader\XLSX\Reader as XlsxReader;
@@ -460,36 +461,44 @@ public function destroyAll()
      * Delega a lógica para o serviço apropriado.
      */
     public function syncFromExchange(Request $request, string $exchange)
-{
-    // Log inicial para confirmar que a requisição chegou.
-    Log::info("✅ [PONTO DE ENTRADA] Requisição para iniciar importação da exchange '{$exchange}'.");
-
-    // Validação simples para garantir que o nome da exchange é válido.
-    $validated = validator(['exchange' => $exchange], ['exchange' => 'required|string|in:binance'])->validate();
-
-    try {
-        // Usa o 'match' para decidir qual Job despachar.
-        // Isso torna fácil adicionar outras exchanges no futuro.
-        match (strtolower($validated['exchange'])) {
-            'binance' => ProcessBinanceImport::dispatch(auth()->user()),
-            // 'coinbase' => ProcessCoinbaseImport::dispatch(auth()->user()), // Exemplo futuro
-            default => throw new Exception("A exchange '{$validated['exchange']}' não é suportada."),
-        };
-
-        Log::info("✅ [PONTO DE ENTRADA] Job de importação para '{$validated['exchange']}' despachado com sucesso para o usuário: " . auth()->id());
-
-        // Retorna uma resposta IMEDIATA para o front-end.
-        // O status 202 (Accepted) é o padrão para "Ok, recebi seu pedido e vou processá-lo".
-        return redirect()->back();
-
-    } catch (Exception $e) {
-        Log::error("🚨 [PONTO DE ENTRADA] Falha ao despachar o Job de importação.", [
-            'exchange' => $exchange,
-            'error' => $e->getMessage()
+    {
+        $validated = $request->validate([
+            'api_key_id' => ['required', 'integer'],
+            'year' => ['required', 'integer', 'min:2009', 'max:' . now('America/Sao_Paulo')->year],
         ]);
-        return response()->json(['error' => 'Não foi possível iniciar o processo de importação.'], 500);
+
+        if (strtolower($exchange) !== 'binance') {
+            return back()->withErrors(['exchange' => 'A exchange selecionada ainda não é suportada.']);
+        }
+
+        $apiKey = UserApiKey::query()
+            ->whereKey($validated['api_key_id'])
+            ->where('user_id', $request->user()->id)
+            ->whereHas('exchange', fn ($query) => $query->where('name', 'binance'))
+            ->firstOrFail();
+
+        ProcessBinanceImport::dispatch($request->user(), $apiKey->id, (int) $validated['year']);
+
+        return back()->with('success', "Sincronização Binance de {$validated['year']} iniciada. A cobertura será atualizada ao término do processamento.");
     }
-}
+
+    public function importCoverage(Request $request, TransactionImportCoverageService $coverageService)
+    {
+        $validated = $request->validate([
+            'api_key_id' => ['required', 'integer'],
+            'year' => ['required', 'integer', 'min:2009', 'max:' . now('America/Sao_Paulo')->year],
+        ]);
+
+        $apiKey = UserApiKey::query()
+            ->whereKey($validated['api_key_id'])
+            ->where('user_id', $request->user()->id)
+            ->whereHas('exchange', fn ($query) => $query->where('name', 'binance'))
+            ->firstOrFail();
+
+        return response()->json(
+            $coverageService->forYear($request->user(), $apiKey->exchange_id, (int) $validated['year'])
+        );
+    }
 
     /**
      * Lida com a importação da Binance instanciando e chamando o BinanceImportService.
@@ -531,6 +540,9 @@ private function handleBinanceImport(Request $request): \Illuminate\Http\JsonRes
         'skip_duplicates' => 'boolean',
         'source_type' => 'required|in:exchange,wallet',
         'source_id' => 'required|integer',
+        'coverage_year' => 'nullable|integer|min:2009|max:' . now('America/Sao_Paulo')->year,
+        'coverage_month' => 'nullable|integer|min:1|max:12',
+        'report_type' => 'nullable|in:spot_trade,convert,deposit,withdrawal,asset_dividend,earn_staking,fiat,other',
     ]);
 
     $sourceModel = match ($validated['source_type']) {
@@ -539,14 +551,23 @@ private function handleBinanceImport(Request $request): \Illuminate\Http\JsonRes
     };
 
     $source = $sourceModel::where('user_id', auth()->id())->findOrFail($validated['source_id']);
+    $isBinanceExchangeImport = $source instanceof UserApiKey
+        && strtolower((string) optional($source->exchange)->name) === 'binance';
+
+    if ($isBinanceExchangeImport && (!isset($validated['coverage_year'], $validated['coverage_month'], $validated['report_type']))) {
+        return back()->withErrors([
+            'report_type' => 'Para relatórios Binance, informe a competência e o tipo de operação do arquivo.',
+        ]);
+    }
 
     $uploadedFile = $request->file('file');
     $extension = strtolower($uploadedFile->getClientOriginalExtension());
     [$headers, $rows] = $this->extractRowsFromImportedFile($uploadedFile->getRealPath(), $extension);
 
     $imported = 0;
+    $recognizedRows = 0;
 
-    $skipDuplicates = (bool) ($validated['skip_duplicates'] ?? false);
+    $skipDuplicates = (bool) ($validated['skip_duplicates'] ?? true);
 
     foreach ($rows as $row) {
         $data = array_combine($headers, $row);
@@ -559,12 +580,26 @@ private function handleBinanceImport(Request $request): \Illuminate\Http\JsonRes
             continue;
         }
 
+        $recognizedRows++;
+
         if ($skipDuplicates && $this->transactionAlreadyExists($transactionData)) {
             continue;
         }
 
         Transaction::create($transactionData);
         $imported++;
+    }
+
+    if ($isBinanceExchangeImport) {
+        app(TransactionImportCoverageService::class)->recordCsvCoverage(
+            $request->user(),
+            $source->exchange_id,
+            (int) $validated['coverage_year'],
+            (int) $validated['coverage_month'],
+            $validated['report_type'],
+            $recognizedRows,
+            $uploadedFile->getClientOriginalName(),
+        );
     }
 
     return redirect()->route('transactions.index')
