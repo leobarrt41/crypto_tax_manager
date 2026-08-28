@@ -10,7 +10,7 @@
               <div>
                 <h2 class="text-2xl font-bold text-gray-900">Relatórios IR — Ganhos de Capital</h2>
                 <p class="text-gray-600 mt-1">
-                  Apuração mensal pelo método FIFO para fins fiscais (IN 1888 / GCAP)
+                  Apuração pelo método FIFO para fins de ganhos de capital e IR. A obrigação declaratória é consultada separadamente.
                 </p>
               </div>
               <Link

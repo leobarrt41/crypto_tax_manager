@@ -175,6 +175,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::prefix('reports')->name('reports.')->group(function () {
         Route::get('/', [ReportController::class, 'index'])->name('index');
         Route::get('/in1888', [ReportController::class, 'in1888'])->name('in1888');
+        Route::post('/in1888/generate', [ReportController::class, 'in1888Report'])->name('generate-in1888');
         Route::get('/tax-summary', [ReportController::class, 'taxSummary'])->name('tax-summary');
         Route::get('/portfolio', [ReportController::class, 'portfolioReport'])->name('portfolio');
         Route::get('/transactions', [ReportController::class, 'transactionReport'])->name('transactions');

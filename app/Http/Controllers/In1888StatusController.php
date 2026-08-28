@@ -88,7 +88,7 @@ class In1888StatusController extends Controller
         $userId   = Auth::id();
         $year     = (int) $request->year;
         $meses    = $this->service->statusAnual($userId, $year);
-        $filename = "in1888_obrigatoriedade_{$year}.csv";
+        $filename = "obrigatoriedade_criptoativos_{$year}.csv";
 
         $headers = [
             'Content-Type'        => 'text/csv; charset=UTF-8',
@@ -106,6 +106,8 @@ class In1888StatusController extends Controller
                 'Mês',
                 'Volume (R$)',
                 'Qtd. Transações',
+                'Obrigação',
+                'Limite (R$)',
                 'Status',
             ], ';');
 
@@ -115,6 +117,10 @@ class In1888StatusController extends Controller
                     $row['month_label'],
                     number_format($row['volume_brl'], 2, ',', '.'),
                     $row['transactions_count'],
+                    data_get($row, 'rule.obligation_name', '—'),
+                    data_get($row, 'rule.monthly_threshold_brl') === null
+                        ? '—'
+                        : number_format((float) data_get($row, 'rule.monthly_threshold_brl'), 2, ',', '.'),
                     $row['status_label'],
                 ], ';');
             }

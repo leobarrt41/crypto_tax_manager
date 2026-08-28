@@ -1,5 +1,5 @@
 <template>
-  <AppLayout title="Geração IN 1888">
+  <AppLayout :title="pageTitle">
     <div class="py-12">
       <div class="max-w-7xl mx-auto sm:px-6 lg:px-8">
         <!-- Header -->
@@ -7,8 +7,8 @@
           <div class="p-6 border-b border-gray-200">
             <div class="flex justify-between items-center">
               <div>
-                <h2 class="text-2xl font-bold text-gray-900">Geração IN 1888</h2>
-                <p class="text-gray-600 mt-1">Gere arquivos de movimentação mensal para a Receita Federal</p>
+                <h2 class="text-2xl font-bold text-gray-900">{{ obligationName }}</h2>
+                <p class="text-gray-600 mt-1">Consulte a regra da competência e gere somente o leiaute fiscal aplicável.</p>
               </div>
               <div class="flex space-x-3">
                 <Link :href="route('reports.index')" 
@@ -20,7 +20,7 @@
                 </Link>
                 <button
                   @click="generateIN1888"
-                  :disabled="loading || !form.year || !form.month"
+                  :disabled="loading || !form.year || !form.month || !canGenerateLegacy"
                   class="bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-lg font-medium transition-colors"
                 >
                   <svg v-if="loading" class="w-5 h-5 inline mr-2 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -30,7 +30,7 @@
                   <svg v-else class="w-5 h-5 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
                   </svg>
-                  {{ loading ? 'Gerando...' : 'Gerar IN 1888' }}
+                  {{ loading ? 'Gerando...' : 'Gerar arquivo legado' }}
                 </button>
               </div>
             </div>
@@ -41,7 +41,7 @@
           <!-- Formulário de Configuração -->
           <div class="lg:col-span-1">
             <div class="bg-white rounded-lg shadow p-6">
-              <h3 class="text-lg font-medium text-gray-900 mb-4">Configurações da IN 1888</h3>
+              <h3 class="text-lg font-medium text-gray-900 mb-4">Configurações da declaração</h3>
               
               <form @submit.prevent="generateIN1888" class="space-y-4">
                 <!-- Período -->
@@ -170,20 +170,20 @@
               </form>
             </div>
 
-            <!-- Informações da IN 1888 -->
             <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mt-6">
               <div class="flex">
-                <svg class="w-5 h-5 text-blue-400 mr-2 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
-                  <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+                <svg class="w-5 h-5 text-blue-500 mr-2 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                  <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
                 </svg>
                 <div>
-                  <h4 class="text-sm font-medium text-blue-800">Sobre a IN 1888</h4>
-                  <ul class="text-sm text-blue-700 mt-1 space-y-1">
-                    <li>• Obrigatória para operações acima de R$ 30.000/mês</li>
-                    <li>• Prazo: até o 15º dia útil do mês seguinte</li>
-                    <li>• Formato: arquivo TXT específico da RFB</li>
-                    <li>• Multa por atraso: R$ 500 a R$ 1.500</li>
-                  </ul>
+                  <h4 class="text-sm font-medium text-blue-800">Regra aplicável à competência</h4>
+                  <div v-if="currentRule" class="text-sm text-blue-700 mt-1 space-y-1">
+                    <p><strong>{{ currentRule.obligation_name }}</strong> — {{ currentRule.legal_reference || 'regra fiscal cadastrada' }}.</p>
+                    <p>Obrigatória quando o volume mensal for superior a <strong>{{ formatCurrency(currentRule.monthly_threshold_brl) }}</strong>.</p>
+                    <p>Prazo: {{ currentRule.deadline_rule }}.</p>
+                    <p v-if="!legacyExportAvailable" class="font-medium text-amber-700">A competência usa DeCripto. O arquivo legado da IN 1888 fica bloqueado até a implementação do leiaute oficial.</p>
+                  </div>
+                  <p v-else class="text-sm text-blue-700 mt-1">Selecione a competência para carregar a regra fiscal aplicável.</p>
                 </div>
               </div>
             </div>
@@ -225,7 +225,7 @@
             <!-- Prévia do Arquivo -->
             <div class="bg-white rounded-lg shadow">
               <div class="p-6 border-b border-gray-200">
-                <h3 class="text-lg font-medium text-gray-900">Prévia do Arquivo IN 1888</h3>
+                <h3 class="text-lg font-medium text-gray-900">Prévia do arquivo {{ obligationName }}</h3>
               </div>
 
               <div v-if="!form.year || !form.month" class="p-8 text-center">
@@ -233,12 +233,12 @@
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
                 </svg>
                 <h4 class="text-lg font-medium text-gray-900 mb-2">Selecione o período</h4>
-                <p class="text-gray-500">Escolha o mês e ano para visualizar a prévia do arquivo IN 1888.</p>
+                <p class="text-gray-500">Escolha o mês e ano para consultar a obrigação e o leiaute aplicável.</p>
               </div>
 
               <div v-else-if="loading" class="p-8 text-center">
                 <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-green-600 mx-auto"></div>
-                <p class="text-gray-500 mt-2">Gerando arquivo IN 1888...</p>
+                <p class="text-gray-500 mt-2">Processando a competência fiscal...</p>
               </div>
 
               <div v-else class="p-6">
@@ -326,7 +326,7 @@
                         <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/>
                       </svg>
                       <span class="text-sm">
-                        {{ monthStats.is_required ? 'Declaração obrigatória (volume > R$ 30.000)' : 'Declaração opcional (volume < R$ 30.000)' }}
+                        {{ monthStats.is_required ? `Declaração obrigatória (volume superior a ${formatCurrency(currentRule?.monthly_threshold_brl)})` : `Declaração não obrigatória para o limite de ${formatCurrency(currentRule?.monthly_threshold_brl)}` }}
                       </span>
                     </div>
                   </div>
@@ -335,24 +335,14 @@
                 <!-- Ações -->
                 <div class="flex space-x-3 pt-4 border-t border-gray-200">
                   <button
-                    @click="previewFile"
-                    class="flex-1 bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded-lg font-medium transition-colors"
-                  >
-                    <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
-                    </svg>
-                    Visualizar Arquivo
-                  </button>
-                  <button
                     @click="generateIN1888"
-                    :disabled="loading"
-                    class="flex-1 bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+                    :disabled="loading || !canGenerateLegacy"
+                    class="w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-lg font-medium transition-colors"
                   >
                     <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
                     </svg>
-                    Gerar e Download
+                    Gerar e baixar arquivo legado
                   </button>
                 </div>
               </div>
@@ -369,10 +359,9 @@
           <div class="bg-white rounded-lg shadow">
             <div class="p-6 border-b border-gray-200 flex flex-wrap items-center justify-between gap-3">
               <div>
-                <h3 class="text-lg font-medium text-gray-900">Obrigatoriedade Mensal — IN 1888</h3>
+                <h3 class="text-lg font-medium text-gray-900">Obrigatoriedade mensal por competência</h3>
                 <p class="text-sm text-gray-500 mt-1">
-                  Considera apenas movimentações em <strong>exchanges estrangeiras</strong> e carteiras próprias.
-                  Exchanges nacionais (ex.: Mercado Bitcoin) reportam diretamente à Receita Federal.
+                  Considera movimentações em <strong>exchanges estrangeiras</strong> e carteiras próprias, aplicando o regime vigente em cada mês.
                 </p>
               </div>
               <div class="flex items-center gap-3">
@@ -431,6 +420,7 @@
                     <th class="pb-3 pr-4">Mês</th>
                     <th class="pb-3 pr-4 text-right">Volume (R$)</th>
                     <th class="pb-3 pr-4 text-right">Transações</th>
+                    <th class="pb-3 pr-4">Obrigação</th>
                     <th class="pb-3">Status</th>
                   </tr>
                 </thead>
@@ -441,6 +431,10 @@
                       {{ row.transactions_count > 0 ? formatCurrency(row.volume_brl) : '—' }}
                     </td>
                     <td class="py-3 pr-4 text-sm text-gray-500 text-right">{{ row.transactions_count }}</td>
+                    <td class="py-3 pr-4 text-sm text-gray-700">
+                      <div>{{ row.rule?.obligation_name || '—' }}</div>
+                      <div class="text-xs text-gray-400">Limite: {{ formatCurrency(row.rule?.monthly_threshold_brl) }}</div>
+                    </td>
                     <td class="py-3">
                       <span
                         class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium"
@@ -463,7 +457,7 @@
 
 <script setup>
 import { ref, computed, watch } from 'vue'
-import { Link, router } from '@inertiajs/vue3'
+import { Link } from '@inertiajs/vue3'
 import AppLayout from '@/Layouts/AppLayout.vue'
 import StatCard from '@/Components/StatCard.vue'
 
@@ -475,7 +469,12 @@ const props = defineProps({
 // ── Status anual de obrigatoriedade ────────────────────────────────────────
 const currentYear = new Date().getFullYear()
 const annualLoading = ref(false)
-const annualData  = ref({ year: currentYear, months: [], summary: null })
+const annualData = ref({ year: currentYear, months: [], summary: null })
+const currentRule = ref(null)
+const legacyExportAvailable = computed(() => currentRule.value?.legacy_export_available === true)
+const canGenerateLegacy = computed(() => legacyExportAvailable.value && monthStats.value.is_required === true)
+const obligationName = computed(() => currentRule.value?.obligation_name || 'Obrigação de criptoativos')
+const pageTitle = computed(() => `Declaração de criptoativos — ${obligationName.value}`)
 const selectedYearForStatus = computed(() => Number(form.value.year) || currentYear)
 
 const loadAnnualStatus = async () => {
@@ -544,10 +543,13 @@ const monthStats = ref({
 })
 
 const formatCurrency = (value) => {
+  const numericValue = Number(value)
+  if (!Number.isFinite(numericValue)) return '—'
+
   return new Intl.NumberFormat('pt-BR', {
     style: 'currency',
     currency: 'BRL'
-  }).format(value)
+  }).format(numericValue)
 }
 
 const getMonthName = (monthNumber) => {
@@ -560,32 +562,46 @@ const generateIN1888 = async () => {
     return
   }
 
-  if (!form.value.declarant_cpf || !form.value.declarant_name) {
-    alert('Por favor, preencha os dados do declarante.')
+  if (!legacyExportAvailable.value) {
+    alert('Esta competência é regida pela DeCripto. O arquivo legado da IN 1888 não pode ser gerado.')
     return
   }
 
   loading.value = true
   try {
-    const response = await router.post(route('reports.generate-in1888'), form.value, {
-      preserveState: true,
-      onSuccess: (page) => {
-        // Redirect to download or show success message
-      }
+    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content')
+    const response = await fetch('/reports/in1888/generate', {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'X-Requested-With': 'XMLHttpRequest',
+        ...(csrfToken ? { 'X-CSRF-TOKEN': csrfToken } : {})
+      },
+      body: JSON.stringify({ month: Number(form.value.month), year: Number(form.value.year) })
     })
+    const payload = await response.json()
+
+    if (!response.ok || !payload.report?.content) {
+      alert(payload.message || 'Não foi possível gerar o arquivo para esta competência.')
+      return
+    }
+
+    const blob = new Blob([payload.report.content], { type: 'text/plain;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = payload.report.filename || `IN1888_${form.value.year}${String(form.value.month).padStart(2, '0')}.txt`
+    link.click()
+    URL.revokeObjectURL(url)
   } catch (error) {
-    console.error('Erro ao gerar IN 1888:', error)
+    console.error('Erro ao gerar arquivo fiscal:', error)
+    alert('Não foi possível processar a declaração. Tente novamente.')
   } finally {
     loading.value = false
   }
 }
 
-const previewFile = () => {
-  window.open(route('reports.preview-in1888', { 
-    year: form.value.year, 
-    month: form.value.month 
-  }), '_blank')
-}
 
 // Watch for period changes to load month stats
 watch([() => form.value.year, () => form.value.month], async ([newYear, newMonth]) => {
@@ -600,6 +616,7 @@ watch([() => form.value.year, () => form.value.month], async ([newYear, newMonth
       }
 
       const data = await response.json()
+      currentRule.value = data.rule ?? null
       monthStats.value = {
         ...monthStats.value,
         total_operations: data.transactions_count ?? 0,
@@ -609,6 +626,7 @@ watch([() => form.value.year, () => form.value.month], async ([newYear, newMonth
       }
     } catch (error) {
       console.error('Erro ao carregar estatísticas:', error)
+      currentRule.value = null
       monthStats.value = {
         ...monthStats.value,
         total_operations: 0,

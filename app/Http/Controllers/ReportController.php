@@ -77,30 +77,31 @@ class ReportController extends Controller
     }
 
     /**
-     * Generate IN 1888 report.
+     * Gera o arquivo legado somente quando a competência ainda estiver sob a
+     * IN 1888. Para DeCripto, devolve uma resposta explícita, sem produzir um
+     * TXT no leiaute anterior.
      */
     public function in1888Report(Request $request)
     {
         $validated = $request->validate([
             'month' => 'required|integer|min:1|max:12',
-            'year' => 'required|integer|min:2020|max:' . date('Y')
+            'year' => 'required|integer|min:2019|max:' . date('Y'),
         ]);
 
         try {
-            $report = $this->in1888Service->generateReport(
-                auth()->user(),
-                $validated['month'],
-                $validated['year']
+            $report = $this->in1888Service->generateMonthlyFile(
+                auth()->id(),
+                (int) $validated['month'],
+                (int) $validated['year']
             );
 
             return response()->json([
-                'message' => 'Relatório IN 1888 gerado com sucesso!',
-                'report' => $report
-            ]);
-
+                'message' => $report['message'] ?? 'Arquivo fiscal processado com sucesso.',
+                'report' => $report,
+            ], ($report['required'] && !$report['export_available']) ? 422 : 200);
         } catch (\Exception $e) {
             return response()->json([
-                'message' => 'Erro ao gerar relatório IN 1888: ' . $e->getMessage()
+                'message' => 'Erro ao processar a declaração de criptoativos: ' . $e->getMessage(),
             ], 500);
         }
     }

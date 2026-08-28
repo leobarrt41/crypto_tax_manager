@@ -2,40 +2,24 @@
 
 namespace App\Services;
 
-use App\Models\Transaction;
-use App\Models\Exchange;
+use App\Models\CryptoReportingRuleVersion;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 
 /**
- * In1888StatusService
- *
- * Calcula a obrigatoriedade mensal da IN 1888 por usuário.
- *
- * Regras legais implementadas:
- * ─────────────────────────────────────────────────────────────────────────────
- * A IN 1888 obriga a declaração mensal quando o volume de movimentações em
- * exchanges ESTRANGEIRAS ou carteiras próprias supera R$ 30.000 no mês.
- *
- * Exchanges NACIONAIS (country_code = 'BR') estão ISENTAS da IN 1888 pois a
- * própria corretora é responsável pelo reporte à Receita Federal.
- *
- * Portanto, apenas transações cujo source seja uma exchange estrangeira
- * (ou carteira/wallet) entram no cálculo do volume mensal.
- * ─────────────────────────────────────────────────────────────────────────────
+ * Mantém compatibilidade com os endpoints legados de IN 1888, mas calcula a
+ * obrigação correta por competência por meio da regra fiscal versionada.
  */
 class In1888StatusService
 {
-    /** Limite mensal em BRL para obrigatoriedade da IN 1888 */
-    public const LIMITE_BRL = 30_000.00;
-
-    /** country_code das exchanges consideradas nacionais */
     public const COUNTRY_CODE_NACIONAL = 'BR';
 
-    // ─── API pública ─────────────────────────────────────────────────────────
+    public function __construct(private CryptoReportingRuleResolver $ruleResolver)
+    {
+    }
 
     /**
-     * Retorna o status IN 1888 do mês/ano informado para o usuário.
+     * Retorna o status da obrigação de criptoativos para uma competência.
      *
      * @return array{
      *   year: int,
@@ -45,169 +29,157 @@ class In1888StatusService
      *   transactions_count: int,
      *   status: 'required'|'not_required'|'no_data',
      *   status_label: string,
+     *   rule: array<string, mixed>
      * }
      */
     public function statusMensal(int $userId, int $year, int $month): array
     {
         $result = $this->calcularVolumeMensal($userId, $year, $month);
+        $rule = $this->ruleResolver->resolve($year, $month);
 
-        return $this->buildStatusRow($year, $month, $result['volume_brl'], $result['count']);
+        return $this->buildStatusRow($year, $month, $result['volume_brl'], $result['count'], $rule);
     }
 
     /**
-     * Retorna o status IN 1888 para todos os 12 meses de um ano.
-     *
-     * @return array Array com 12 elementos, um por mês.
+     * Retorna 12 competências, cada uma com a regra vigente no respectivo mês.
      */
     public function statusAnual(int $userId, int $year): array
     {
-        // Busca todos os meses do ano de uma vez (query única)
         $rows = $this->calcularVolumeAnual($userId, $year);
-
         $meses = [];
-        for ($m = 1; $m <= 12; $m++) {
-            $row = $rows->firstWhere('month', $m);
+
+        for ($month = 1; $month <= 12; $month++) {
+            $row = $rows->firstWhere('month', $month);
+            $rule = $this->ruleResolver->resolve($year, $month);
+
             $meses[] = $this->buildStatusRow(
                 $year,
-                $m,
+                $month,
                 $row ? (float) $row->volume_brl : 0.0,
-                $row ? (int)   $row->count       : 0
+                $row ? (int) $row->count : 0,
+                $rule
             );
         }
 
         return $meses;
     }
 
-    /**
-     * Retorna o status do mês atual — usado pelo Dashboard.
-     */
     public function statusMesAtual(int $userId): array
     {
         $now = Carbon::now('America/Sao_Paulo');
+
         return $this->statusMensal($userId, $now->year, $now->month);
     }
 
     /**
-     * Retorna o resumo anual (contagem por status).
-     *
      * @return array{required: int, not_required: int, no_data: int}
      */
     public function resumoAnual(int $userId, int $year): array
     {
-        $meses = $this->statusAnual($userId, $year);
-
-        return [
-            'required'     => collect($meses)->where('status', 'required')->count(),
-            'not_required' => collect($meses)->where('status', 'not_required')->count(),
-            'no_data'      => collect($meses)->where('status', 'no_data')->count(),
-        ];
+        return collect($this->statusAnual($userId, $year))
+            ->countBy('status')
+            ->pipe(fn ($summary) => [
+                'required' => (int) ($summary['required'] ?? 0),
+                'not_required' => (int) ($summary['not_required'] ?? 0),
+                'no_data' => (int) ($summary['no_data'] ?? 0),
+            ]);
     }
 
-    // ─── Lógica interna ──────────────────────────────────────────────────────
+    /**
+     * Expõe a regra vigente para a tela de geração, sem duplicar a resolução.
+     */
+    public function regraDaCompetencia(int $year, int $month): array
+    {
+        return $this->ruleResolver->context($year, $month);
+    }
 
     /**
-     * Calcula o volume mensal de movimentações em exchanges ESTRANGEIRAS
-     * e carteiras (source_type = Wallet) para o usuário.
-     *
-     * Exchanges nacionais (country_code = 'BR') são excluídas — a obrigação
-     * de reporte é da própria corretora nacional.
+     * Considera operações do usuário em prestadora estrangeira e em carteira
+     * própria. Exchanges brasileiras são excluídas do escopo do usuário.
      *
      * @return array{volume_brl: float, count: int}
      */
     private function calcularVolumeMensal(int $userId, int $year, int $month): array
     {
         $start = Carbon::create($year, $month, 1, 0, 0, 0, 'America/Sao_Paulo')->startOfMonth();
-        $end   = $start->copy()->endOfMonth();
-
-        $query = $this->baseQuery($userId, $start, $end);
-        $row   = $query->first();
+        $end = $start->copy()->endOfMonth();
+        $row = $this->baseQuery($userId, $start, $end)->first();
 
         return [
             'volume_brl' => $row ? (float) $row->volume_brl : 0.0,
-            'count'      => $row ? (int)   $row->count       : 0,
+            'count' => $row ? (int) $row->count : 0,
         ];
     }
 
-    /**
-     * Calcula o volume de todos os meses de um ano em uma única query.
-     */
     private function calcularVolumeAnual(int $userId, int $year)
     {
         $start = Carbon::create($year, 1, 1, 0, 0, 0, 'America/Sao_Paulo')->startOfYear();
-        $end   = $start->copy()->endOfYear();
+        $end = $start->copy()->endOfYear();
 
         return $this->baseQuery($userId, $start, $end, groupByMonth: true)->get();
     }
 
-    /**
-     * Query base: transações de exchanges estrangeiras + carteiras.
-     *
-     * A exclusão de exchanges nacionais é feita via LEFT JOIN na tabela
-     * user_api_keys → exchanges, filtrando country_code <> 'BR'.
-     *
-     * Para source_type = Wallet (carteiras próprias), sempre inclui.
-     */
     private function baseQuery(int $userId, Carbon $start, Carbon $end, bool $groupByMonth = false)
     {
         $query = DB::table('transactions as t')
             ->where('t.user_id', $userId)
             ->whereBetween('t.date', [$start->toDateTimeString(), $end->toDateTimeString()])
-            // Junta com user_api_keys para obter o exchange_id (apenas quando source = UserApiKey)
             ->leftJoin('user_api_keys as uak', function ($join) {
                 $join->on('uak.id', '=', 't.source_id')
-                     ->where('t.source_type', '=', 'App\\Models\\UserApiKey');
+                    ->where('t.source_type', '=', 'App\\Models\\UserApiKey');
             })
-            // Junta com exchanges para verificar o country_code
             ->leftJoin('exchanges as ex', 'ex.id', '=', 'uak.exchange_id')
-            // Exclui exchanges nacionais (BR). Inclui wallets (uak.id IS NULL) e exchanges estrangeiras.
-            ->where(function ($q) {
-                $q->whereNull('uak.id')                                       // é carteira (wallet)
-                  ->orWhere('ex.country_code', '<>', self::COUNTRY_CODE_NACIONAL) // é exchange estrangeira
-                  ->orWhereNull('ex.country_code');                           // exchange sem country_code cadastrado
+            ->where(function ($query) {
+                $query->whereNull('uak.id')
+                    ->orWhere('ex.country_code', '<>', self::COUNTRY_CODE_NACIONAL)
+                    ->orWhereNull('ex.country_code');
             })
             ->selectRaw('SUM(ABS(COALESCE(t.total_brl, 0))) as volume_brl, COUNT(*) as count');
 
         if ($groupByMonth) {
             $query->selectRaw('MONTH(t.date) as month')
-                  ->groupByRaw('MONTH(t.date)');
+                ->groupByRaw('MONTH(t.date)');
         }
 
         return $query;
     }
 
-    /**
-     * Monta o array de status para um mês.
-     */
-    private function buildStatusRow(int $year, int $month, float $volumeBrl, int $count): array
-    {
+    private function buildStatusRow(
+        int $year,
+        int $month,
+        float $volumeBrl,
+        int $count,
+        CryptoReportingRuleVersion $rule
+    ): array {
         if ($count === 0) {
-            $status      = 'no_data';
+            $status = 'no_data';
             $statusLabel = 'Sem dados';
-        } elseif ($volumeBrl > self::LIMITE_BRL) {
-            $status      = 'required';
+        } elseif ($this->ruleResolver->isMonthlyDeclarationRequired($volumeBrl, $rule)) {
+            $status = 'required';
             $statusLabel = 'Obrigatória';
         } else {
-            $status      = 'not_required';
+            $status = 'not_required';
             $statusLabel = 'Não obrigatória';
         }
 
         return [
-            'year'               => $year,
-            'month'              => $month,
-            'month_label'        => $this->nomeMes($month),
-            'volume_brl'         => round($volumeBrl, 2),
+            'year' => $year,
+            'month' => $month,
+            'month_label' => $this->nomeMes($month),
+            'volume_brl' => round($volumeBrl, 2),
             'transactions_count' => $count,
-            'status'             => $status,
-            'status_label'       => $statusLabel,
+            'status' => $status,
+            'status_label' => $statusLabel,
+            'rule' => $this->ruleResolver->context($year, $month),
         ];
     }
 
     private function nomeMes(int $month): string
     {
         return [
-            1 => 'Janeiro',   2 => 'Fevereiro', 3 => 'Março',
-            4 => 'Abril',     5 => 'Maio',      6 => 'Junho',
-            7 => 'Julho',     8 => 'Agosto',    9 => 'Setembro',
+            1 => 'Janeiro', 2 => 'Fevereiro', 3 => 'Março',
+            4 => 'Abril', 5 => 'Maio', 6 => 'Junho',
+            7 => 'Julho', 8 => 'Agosto', 9 => 'Setembro',
             10 => 'Outubro', 11 => 'Novembro', 12 => 'Dezembro',
         ][$month] ?? "Mês {$month}";
     }

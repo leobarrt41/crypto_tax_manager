@@ -32,38 +32,67 @@ use Illuminate\Support\Facades\Storage;
  */
 class IN1888Service
 {
+    public function __construct(private CryptoReportingRuleResolver $ruleResolver)
+    {
+    }
+
     // ─── Ponto de entrada principal ──────────────────────────────────────────
 
+    /**
+     * Gera somente o leiaute legado quando ele for a regra aplicável à competência.
+     * Competências DeCripto recebem retorno explícito para impedir um arquivo
+     * estruturalmente inválido ser usado como declaração atual.
+     */
     public function generateMonthlyFile(int $userId, int $month, int $year): array
     {
-        $user         = User::findOrFail($userId);
+        $user = User::findOrFail($userId);
+        $rule = $this->ruleResolver->resolve($year, $month);
         $transactions = $this->getMonthlyTransactions($userId, $month, $year);
-        $totalVolume  = $transactions->sum('total_brl');
+        $totalVolume = (float) $transactions->sum('total_brl');
+        $isRequired = $this->ruleResolver->isMonthlyDeclarationRequired($totalVolume, $rule);
+        $ruleContext = $this->ruleResolver->context($year, $month);
 
-        if ($totalVolume <= 30000) {
+        if (!$isRequired) {
+            $limit = number_format((float) $rule->monthly_threshold_brl, 2, ',', '.');
+
             return [
-                'required'           => false,
-                'message'            => 'Volume mensal inferior a R$ 30.000. IN 1888 não é obrigatória.',
-                'total_volume'       => $totalVolume,
+                'required' => false,
+                'export_available' => $rule->legacy_export_available,
+                'message' => "Volume mensal não superior a R$ {$limit}. {$rule->obligation_name} não é obrigatória para esta competência.",
+                'total_volume' => $totalVolume,
                 'transactions_count' => $transactions->count(),
+                'rule' => $ruleContext,
             ];
         }
 
-        $content  = $this->buildFileContent($transactions, $user, $month, $year);
+        if (!$rule->legacy_export_available) {
+            return [
+                'required' => true,
+                'export_available' => false,
+                'message' => "A competência {$month}/{$year} é regida por {$rule->obligation_name}. O arquivo legado da IN 1888 não pode ser gerado para este período.",
+                'total_volume' => $totalVolume,
+                'transactions_count' => $transactions->count(),
+                'rule' => $ruleContext,
+            ];
+        }
+
+        $content = $this->buildFileContent($transactions, $user, $month, $year);
         $filename = $this->generateFilename($user, $month, $year);
 
         Storage::disk('local')->put("in1888/{$filename}", $content);
 
-        Log::info("[IN1888] Arquivo gerado para usuário {$userId} — {$month}/{$year}: {$filename}");
+        Log::info("[IN1888] Arquivo legado gerado para usuário {$userId} — {$month}/{$year}: {$filename}");
 
         return [
-            'required'           => true,
-            'filename'           => $filename,
-            'content'            => $content,
-            'total_volume'       => $totalVolume,
+            'required' => true,
+            'export_available' => true,
+            'filename' => $filename,
+            'content' => $content,
+            'total_volume' => $totalVolume,
             'transactions_count' => $transactions->count(),
-            'file_path'          => storage_path("app/in1888/{$filename}"),
-            'download_url'       => route('in1888.download', $filename),
+            'file_path' => storage_path("app/in1888/{$filename}"),
+            'download_url' => route('in1888.download', $filename),
+            'rule' => $ruleContext,
         ];
     }
 
@@ -71,12 +100,12 @@ class IN1888Service
 
     /**
      * Retorna as transações do mês que devem constar na IN 1888.
-     * Exclui exchanges nacionais (country = 'BR').
+     * Exclui exchanges nacionais (country_code = 'BR').
      */
     public function getMonthlyTransactions(int $userId, int $month, int $year)
     {
         $nationalApiKeyIds = UserApiKey::where('user_id', $userId)
-            ->whereHas('exchange', fn ($q) => $q->where('country', 'BR'))
+            ->whereHas('exchange', fn ($q) => $q->where('country_code', 'BR'))
             ->pluck('id')
             ->toArray();
 

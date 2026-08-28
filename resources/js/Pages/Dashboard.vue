@@ -57,7 +57,7 @@
             </div>
             <div class="ml-5 w-0 flex-1">
               <dl>
-                <dt class="text-sm font-medium text-gray-500 truncate">Status IN 1888</dt>
+                <dt class="text-sm font-medium text-gray-500 truncate">Status {{ in1888ObligationName }}</dt>
                 <dd class="text-2xl font-semibold text-gray-900">
                   {{ in1888StatusLabel }}
                 </dd>
@@ -151,8 +151,8 @@
             />
             
             <QuickActionCard
-              title="Gerar IN 1888"
-              description="Gere o arquivo para declaração à Receita Federal"
+              title="Declarações de criptoativos"
+              description="Consulte a obrigação vigente e gere o arquivo quando disponível"
               icon="document"
               color="green"
               href="/tax-reports/in1888"
@@ -298,8 +298,9 @@ const getComplianceColor = (status) => {
   return colors[status] || 'gray'
 }
 
-// Card IN 1888 — computed helpers
+// Card de obrigação de criptoativos — computed helpers
 const in1888Status = computed(() => props.stats?.in1888_status ?? {})
+const in1888ObligationName = computed(() => in1888Status.value?.obligation_name || 'de criptoativos')
 
 const in1888StatusLabel = computed(() => {
   const s = in1888Status.value

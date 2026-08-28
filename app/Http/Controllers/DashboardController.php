@@ -120,23 +120,30 @@ class DashboardController extends Controller
 
         // Adapta o retorno para o formato esperado pelo Dashboard.vue
         return [
-            'status'      => $status['status'],
-            'message'     => $status['status_label'],
+            'status' => $status['status'],
+            'message' => $status['status_label'],
             'description' => $this->buildIn1888Description($status),
-            'volume'      => $status['volume_brl'],
+            'volume' => $status['volume_brl'],
+            'obligation_name' => data_get($status, 'rule.obligation_name', 'Obrigação de criptoativos'),
+            'rule' => $status['rule'] ?? null,
         ];
     }
 
     private function buildIn1888Description(array $status): string
     {
-        $mes    = $status['month_label'] . '/' . $status['year'];
-        $volume = 'R$ ' . number_format($status['volume_brl'], 2, ',', '.');
+        $mes = $status['month_label'] . '/' . $status['year'];
+        $volume = 'R$ ' . number_format((float) $status['volume_brl'], 2, ',', '.');
+        $obligation = data_get($status, 'rule.obligation_name', 'Obrigação de criptoativos');
+        $threshold = data_get($status, 'rule.monthly_threshold_brl');
+        $thresholdLabel = $threshold === null
+            ? null
+            : 'R$ ' . number_format((float) $threshold, 2, ',', '.');
 
         return match ($status['status']) {
-            'no_data'      => "Sem movimentações em exchanges estrangeiras em {$mes}.",
-            'not_required' => "Volume de {$volume} em {$mes} — abaixo do limite de R$ 30.000.",
-            'required'     => "Volume de {$volume} em {$mes} — acima do limite de R$ 30.000.",
-            default        => "Referente a {$mes}.",
+            'no_data' => "Sem movimentações no escopo de {$obligation} em {$mes}.",
+            'not_required' => "{$obligation}: volume de {$volume} em {$mes} — não superior a {$thresholdLabel}.",
+            'required' => "{$obligation}: volume de {$volume} em {$mes} — superior a {$thresholdLabel}.",
+            default => "{$obligation} referente a {$mes}.",
         };
     }
 
