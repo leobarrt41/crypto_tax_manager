@@ -77,6 +77,26 @@ class Transaction extends Model
     }
 
 
+    /**
+     * Taxa da operação expressa no ativo enviado por uma unidade do ativo recebido.
+     * Não representa, por si só, um preço em USD ou BRL.
+     */
+    public function getEffectiveConversionRateAttribute(): ?array
+    {
+        $fromAmount = (float) ($this->from_amount ?? 0);
+        $toAmount = (float) ($this->to_amount ?? 0);
+
+        if ($fromAmount <= 0 || $toAmount <= 0 || empty($this->from_asset) || empty($this->to_asset)) {
+            return null;
+        }
+
+        return [
+            'value' => $fromAmount / $toAmount,
+            'base_asset' => $this->from_asset,
+            'quoted_asset' => $this->to_asset,
+        ];
+    }
+
     public function getPriceInBRLAttribute()
 {
     $price = $this->cryptoAsset->prices()

@@ -83,6 +83,29 @@ public function index(Request $request)
         $transaction->fee_brl = null;
         $transaction->fee_usdt = null;
 
+        $fromAmount = (float) ($transaction->from_amount ?? 0);
+        $toAmount = (float) ($transaction->to_amount ?? 0);
+        $hasConversionRate = $fromAmount > 0 && $toAmount > 0
+            && !empty($transaction->from_asset) && !empty($transaction->to_asset);
+
+        // `price` pode ser uma taxa entre criptoativos, especialmente em Convert.
+        // O contrato de apresentação deixa a unidade explícita e não a trata como USD.
+        $transaction->presentation = [
+            'from' => [
+                'label' => 'Enviado',
+                'amount' => $fromAmount,
+                'asset' => $transaction->from_asset,
+            ],
+            'to' => [
+                'label' => 'Recebido',
+                'amount' => $toAmount,
+                'asset' => $transaction->to_asset,
+            ],
+            'effective_rate' => $transaction->effective_conversion_rate,
+            'brl_value_available' => (float) ($transaction->total_brl ?? 0) > 0,
+            'usdt_value_available' => (float) ($transaction->total_usdt ?? 0) > 0,
+        ];
+
         if (!empty($transaction->commission) && !empty($transaction->commission_asset) && $transaction->date) {
             try {
                 $prices = $priceService->getOrCreatePrice(

@@ -65,7 +65,7 @@
             @change="onCurrencyChange"
           >
             <option value="BRL">Real (BRL)</option>
-            <option value="USDT">Dólar (USDT)</option>
+            <option value="USDT">USDT (stablecoin)</option>
           </select>
         </div>
       </div>
@@ -286,11 +286,22 @@
                     </div>
                     <div class="mt-1 flex items-center text-sm text-gray-500">
                       <p>
-                        {{ formatQuantity(transaction?.from_amount) }} {{ transaction?.from_asset }}
-                        → {{ formatQuantity(transaction?.to_amount) }} {{ transaction?.to_asset }}
+                        <span class="font-medium text-gray-700">Enviado:</span>
+                        {{ formatQuantity(transaction?.presentation?.from?.amount ?? transaction?.from_amount) }} {{ transaction?.presentation?.from?.asset ?? transaction?.from_asset }}
                       </p>
-                      <span class="mx-2">&bull;</span>
-                      <p>{{ formatCurrency(getUnitPrice(transaction), displayCurrency.value === 'BRL' ? 'BRL' : 'USDT') }} por unidade</p>
+                      <span class="mx-2">&rarr;</span>
+                      <p>
+                        <span class="font-medium text-gray-700">Recebido:</span>
+                        {{ formatQuantity(transaction?.presentation?.to?.amount ?? transaction?.to_amount) }} {{ transaction?.presentation?.to?.asset ?? transaction?.to_asset }}
+                      </p>
+                      <template v-if="getEffectiveRate(transaction)">
+                        <span class="mx-2">&bull;</span>
+                        <p>
+                          <span class="font-medium text-gray-700">Taxa efetiva:</span>
+                          1 {{ getEffectiveRate(transaction).quoted_asset }} =
+                          {{ formatRate(getEffectiveRate(transaction).value) }} {{ getEffectiveRate(transaction).base_asset }}
+                        </p>
+                      </template>
                       <template v-if="transaction?.fee_brl !== null">
                         <span class="mx-2">&bull;</span>
                         <p>Taxa: {{ formatCurrency(transaction?.fee_brl, 'BRL') }}</p>
@@ -304,8 +315,14 @@
                 <!-- CORREÇÃO: Ações -->
                 <div class="flex items-center">
                   <div class="text-right mr-4">
-                    <p class="text-sm font-medium text-gray-900">
+                    <p class="text-xs text-gray-500">
+                      {{ displayCurrency === 'BRL' ? 'Valor fiscal em BRL' : 'Valor em USDT' }}
+                    </p>
+                    <p v-if="hasDisplayedTotal(transaction)" class="text-sm font-medium text-gray-900">
                       {{ formatCurrency(getDisplayedTotal(transaction), displayCurrency) }}
+                    </p>
+                    <p v-else class="text-sm font-medium text-amber-700">
+                      Pendente de cotação
                     </p>
                     <p class="text-xs text-gray-500">
                       Ref: {{ transaction?.reference || 'N/A' }}
@@ -594,34 +611,26 @@ const getDisplayedTotal = (transaction) => {
   return Number(total)
 }
 
-const getUnitPrice = (transaction) => {
-  if (!transaction) return 0
-
-  const price = Number(transaction.price) || 0
-
-  if (transaction.type !== 'convert') {
-    return price
+const getEffectiveRate = (transaction) => {
+  const rate = transaction?.presentation?.effective_rate
+  if (rate?.value > 0 && rate?.base_asset && rate?.quoted_asset) {
+    return rate
   }
 
-  const toAmount = Number(transaction.to_amount) || 0
-  if (toAmount === 0) {
-    return 0
+  const fromAmount = Number(transaction?.from_amount) || 0
+  const toAmount = Number(transaction?.to_amount) || 0
+  if (fromAmount <= 0 || toAmount <= 0 || !transaction?.from_asset || !transaction?.to_asset) {
+    return null
   }
 
-  if (displayCurrency.value === 'BRL') {
-    const totalBrl = Number(transaction.total_brl) || 0
-    if (totalBrl > 0) {
-      return totalBrl / toAmount
-    }
+  return {
+    value: fromAmount / toAmount,
+    base_asset: transaction.from_asset,
+    quoted_asset: transaction.to_asset,
   }
-
-  const totalUsdt = Number(transaction.total_usdt) || 0
-  if (totalUsdt > 0) {
-    return totalUsdt / toAmount
-  }
-
-  return price
 }
+
+const hasDisplayedTotal = (transaction) => getDisplayedTotal(transaction) > 0
 
 // Computed para gerar os números de página com elipses
 const paginationPages = computed(() => {
@@ -896,10 +905,10 @@ const formatCurrency = (value, currency = 'BRL') => {
     }).format(numValue)
   }
   
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-  }).format(numValue)
+  return `${new Intl.NumberFormat('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 8,
+  }).format(numValue)} USDT`
 }
 
 const formatQuantity = (value) => {
@@ -907,6 +916,15 @@ const formatQuantity = (value) => {
   return new Intl.NumberFormat('pt-BR', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 8,
+  }).format(numValue)
+}
+
+const formatRate = (value) => {
+  const numValue = Number(value)
+  if (!Number.isFinite(numValue) || numValue <= 0) return '—'
+
+  return new Intl.NumberFormat('pt-BR', {
+    maximumFractionDigits: 12,
   }).format(numValue)
 }
 
