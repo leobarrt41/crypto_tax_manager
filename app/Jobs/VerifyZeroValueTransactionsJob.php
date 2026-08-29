@@ -36,16 +36,21 @@ class VerifyZeroValueTransactionsJob implements ShouldQueue
     /** Mantém compatibilidade com payloads serializados antes deste campo. */
     protected ?int $importSessionId = null;
 
+    /** Ano da competência da sincronização, quando o job for disparado pela importação. */
+    protected ?int $year = null;
+
     public function __construct(
         int $userId,
         ?int $sourceId = null,
         bool $notifyUser = false,
         ?int $importSessionId = null,
+        ?int $year = null,
     ) {
         $this->userId = $userId;
         $this->sourceId = $sourceId;
         $this->notifyUser = $notifyUser;
         $this->importSessionId = $importSessionId;
+        $this->year = $year;
     }
 
     public function handle(TransactionVerificationService $verificationService): void
@@ -63,10 +68,13 @@ class VerifyZeroValueTransactionsJob implements ShouldQueue
         if ($this->sourceId) {
             Log::info("🏦 ID da origem/API: {$this->sourceId}");
         }
+        if ($this->year) {
+            Log::info("📅 Ano da competência: {$this->year}");
+        }
 
         try {
             $user = User::findOrFail($this->userId);
-            $stats = $verificationService->verifyAndUpdateZeroValueTransactions($user, $this->sourceId);
+            $stats = $verificationService->verifyAndUpdateZeroValueTransactions($user, $this->sourceId, $this->year);
 
             $this->completeSessionPricing($session, $stats);
 
@@ -82,6 +90,7 @@ class VerifyZeroValueTransactionsJob implements ShouldQueue
                 'user_id' => $this->userId,
                 'source_id' => $this->sourceId,
                 'import_session_id' => $this->importSessionId,
+                'year' => $this->year,
                 'error' => $exception->getMessage(),
                 'trace' => $exception->getTraceAsString(),
             ]);
@@ -98,6 +107,7 @@ class VerifyZeroValueTransactionsJob implements ShouldQueue
             'user_id' => $this->userId,
             'source_id' => $this->sourceId,
             'import_session_id' => $this->importSessionId,
+            'year' => $this->year,
             'error' => $exception->getMessage(),
         ]);
     }

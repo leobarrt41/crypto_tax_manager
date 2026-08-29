@@ -119,6 +119,7 @@ class ProcessBinanceImport implements ShouldQueue
             $this->apiKeyId,
             true,
             $session?->id,
+            $this->year,
         )->onQueue('default');
     }
 }

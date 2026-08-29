@@ -100,6 +100,19 @@ class TransactionVerificationSourceIdTest extends TestCase
             'source_type' => 'App\\Models\\UserApiKey',
             'source_id' => 11,
         ]);
+        $sameSourceDifferentYear = Transaction::query()->create([
+            'user_id' => $user->id,
+            'type' => 'convert',
+            'from_asset' => 'RIF',
+            'from_amount' => 10,
+            'to_asset' => 'USDT',
+            'to_amount' => 4,
+            'total_usdt' => 0,
+            'total_brl' => 0,
+            'date' => '2025-08-22 20:09:00',
+            'source_type' => 'App\\Models\\UserApiKey',
+            'source_id' => 22,
+        ]);
 
         $price = new CryptoAssetPrice();
         $price->price_usd = 1;
@@ -110,7 +123,7 @@ class TransactionVerificationSourceIdTest extends TestCase
         app()->instance(CryptoPriceService::class, $priceService);
 
         $result = app(TransactionVerificationService::class)
-            ->verifyAndUpdateZeroValueTransactions($user, 22);
+            ->verifyAndUpdateZeroValueTransactions($user, 22, 2026);
 
         $this->assertSame(1, $result['total_checked']);
         $this->assertSame(1, $result['total_updated']);
@@ -118,6 +131,7 @@ class TransactionVerificationSourceIdTest extends TestCase
         $this->assertSame('10.0000000000', $target->fresh()->total_brl);
         $this->assertSame('completed', $target->fresh()->pricing_status);
         $this->assertSame('0.0000000000', $untargeted->fresh()->total_brl);
+        $this->assertSame('0.0000000000', $sameSourceDifferentYear->fresh()->total_brl);
     }
 
     public function test_conversion_received_in_brl_uses_the_received_value_and_ptax(): void

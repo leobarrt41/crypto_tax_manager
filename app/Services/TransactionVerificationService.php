@@ -31,9 +31,10 @@ class TransactionVerificationService
      * 
      * @param User $user
      * @param int|null $sourceId ID da chave de API/origem (opcional)
+     * @param int|null $year Competência anual a verificar (opcional)
      * @return array Estatísticas da verificação
      */
-    public function verifyAndUpdateZeroValueTransactions(User $user, ?int $sourceId = null): array
+    public function verifyAndUpdateZeroValueTransactions(User $user, ?int $sourceId = null, ?int $year = null): array
     {
         Log::info("======================================================================");
         Log::info("🔍 [Verificação] Iniciando verificação de transações com valores zero");
@@ -41,6 +42,9 @@ class TransactionVerificationService
         Log::info("👤 Usuário: {$user->id}");
         if ($sourceId) {
             Log::info("🏦 ID da origem/API: {$sourceId}");
+        }
+        if ($year) {
+            Log::info("📅 Ano da competência: {$year}");
         }
         
         $stats = [
@@ -66,6 +70,9 @@ class TransactionVerificationService
             
         if ($sourceId) {
             $query->where('source_id', $sourceId);
+        }
+        if ($year) {
+            $query->whereYear('date', $year);
         }
         
         $zeroValueTransactions = $query->orderBy('date', 'asc')->get();
