@@ -25,9 +25,9 @@ class PortfolioMetricsService
     private const EXIT_TYPES = ['sell', 'fiat_sell', 'withdrawal', 'withdraw', 'send', 'fee'];
     private const CONVERSION_TYPES = ['trade', 'convert', 'swap'];
 
-    public function overview(User $user, string $period = '30d'): array
+    public function overview(User $user, string $period = '30d', ?int $walletId = null): array
     {
-        $assets = $this->assets($user);
+        $assets = $this->assets($user, $walletId);
         $totalValue = round($assets->sum('value_brl'), 2);
         $pricedAssets = $assets->where('price_available', true);
         $costedAssets = $assets->where('cost_basis_available', true);
@@ -44,8 +44,12 @@ class PortfolioMetricsService
             : null;
 
         $portfolio = $this->portfolioRecord($user);
-        $this->recordDailySnapshot($portfolio, $totalValue, $totalInvested, $totalPnl, $assets);
-        $history = $this->history($user, $period);
+        // A fotografia local consolidada só pode refletir todas as carteiras.
+        // Ao filtrar uma carteira, a tela deve apenas consultar seus dados.
+        if ($walletId === null) {
+            $this->recordDailySnapshot($portfolio, $totalValue, $totalInvested, $totalPnl, $assets);
+        }
+        $history = $this->history($user, $period, $walletId);
         $riskMetrics = $this->riskMetrics($history['data']);
 
         $allocations = $assets
@@ -76,7 +80,10 @@ class PortfolioMetricsService
             ->values()
             ->all();
 
-        $walletCount = Wallet::where('user_id', $user->id)->count();
+        $walletCount = Wallet::query()
+            ->where('user_id', $user->id)
+            ->when($walletId !== null, fn ($query) => $query->whereKey($walletId))
+            ->count();
         $priceCoverage = $assets->isEmpty()
             ? 100.0
             : round(($pricedAssets->count() / $assets->count()) * 100, 2);
@@ -113,6 +120,7 @@ class PortfolioMetricsService
             'price_coverage_percentage' => $priceCoverage,
             'cost_basis_coverage_percentage' => $costCoverage,
             'period' => $period,
+            'wallet_id' => $walletId,
         ];
     }
 
@@ -154,16 +162,26 @@ class PortfolioMetricsService
             ->all();
     }
 
-    public function history(User $user, string $period = '30d'): array
+    public function history(User $user, string $period = '30d', ?int $walletId = null): array
     {
         $startDate = $this->periodStart($period);
         $portfolio = $this->portfolioRecord($user);
 
-        $data = PortfolioSnapshot::query()
+        $snapshots = PortfolioSnapshot::query()
             ->where('portfolio_id', $portfolio->id)
             ->where('snapshot_date', '>=', $startDate->copy()->startOfDay())
+            ->when(
+                $walletId !== null,
+                fn ($query) => $query->where('wallet_id', $walletId),
+                fn ($query) => $query->whereNull('wallet_id'),
+            )
             ->orderBy('snapshot_date')
             ->get()
+            ->groupBy(fn (PortfolioSnapshot $snapshot) => $snapshot->snapshot_date->timezone('America/Sao_Paulo')->toDateString())
+            ->map(fn (Collection $items) => $items->sortByDesc(
+                fn (PortfolioSnapshot $snapshot) => $this->snapshotSourcePriority($this->resolvedSnapshotSource($snapshot))
+            )->first())
+            ->values()
             // Snapshots vazios criados antes da primeira sincronização não
             // representam uma queda ou crescimento real do portfólio. Remover
             // apenas os zeros iniciais preserva uma liquidação posterior real.
@@ -171,31 +189,36 @@ class PortfolioMetricsService
                 $assets = data_get($snapshot->data, 'assets', []);
 
                 return (float) $snapshot->total_value_brl > 0 || !empty($assets);
-            })
+            });
+        $data = $snapshots
             ->map(fn (PortfolioSnapshot $snapshot) => [
-                'date' => $snapshot->snapshot_date->toDateString(),
+                'date' => $snapshot->snapshot_date->timezone('America/Sao_Paulo')->toDateString(),
                 'value_brl' => (float) $snapshot->total_value_brl,
                 'total_pnl_brl' => $snapshot->total_pnl === null ? null : (float) $snapshot->total_pnl,
+                'source' => $this->resolvedSnapshotSource($snapshot),
+                'reconstruction_status' => $snapshot->reconstruction_status ?? 'complete',
+                'coverage_percentage' => $snapshot->coverage_percentage === null ? 100.0 : (float) $snapshot->coverage_percentage,
             ])
             ->values()
             ->all();
 
         return [
             'period' => $period,
+            'wallet_id' => $walletId,
             'start_date' => $startDate->toDateString(),
-            'end_date' => now()->toDateString(),
+            'end_date' => now('America/Sao_Paulo')->toDateString(),
             'data' => $data,
         ];
     }
 
-    public function allocation(User $user): array
+    public function allocation(User $user, ?int $walletId = null): array
     {
-        return $this->overview($user)['allocations'];
+        return $this->overview($user, '30d', $walletId)['allocations'];
     }
 
-    public function performance(User $user, string $period = '30d'): array
+    public function performance(User $user, string $period = '30d', ?int $walletId = null): array
     {
-        $history = $this->history($user, $period);
+        $history = $this->history($user, $period, $walletId);
         $points = $history['data'];
         $first = $points[0]['value_brl'] ?? null;
         $last = $points[array_key_last($points)]['value_brl'] ?? null;
@@ -214,10 +237,11 @@ class PortfolioMetricsService
         ];
     }
 
-    private function assets(User $user): Collection
+    private function assets(User $user, ?int $walletId = null): Collection
     {
         $balances = $user->walletBalances()
             ->with('wallet:id,name')
+            ->when($walletId !== null, fn ($query) => $query->where('wallet_balances.wallet_id', $walletId))
             ->whereRaw('(available + locked) > 0')
             ->get()
             ->groupBy(fn ($balance) => strtoupper((string) $balance->asset));
@@ -418,22 +442,43 @@ class PortfolioMetricsService
             return;
         }
 
+        $pricedAssets = $assets->where('price_available', true);
+        $coverage = $assets->isEmpty()
+            ? 100.0
+            : round(($pricedAssets->count() / $assets->count()) * 100, 2);
+        $unpricedAssets = $assets
+            ->reject(fn (array $asset) => $asset['price_available'])
+            ->pluck('symbol')
+            ->values()
+            ->all();
+
         $snapshot = PortfolioSnapshot::query()
             ->where('portfolio_id', $portfolio->id)
-            ->whereDate('snapshot_date', today())
-            ->first() ?? new PortfolioSnapshot(['portfolio_id' => $portfolio->id]);
+            ->whereNull('wallet_id')
+            ->where('source', 'local')
+            ->whereDate('snapshot_date', now('America/Sao_Paulo')->toDateString())
+            ->first() ?? new PortfolioSnapshot([
+                'portfolio_id' => $portfolio->id,
+                'wallet_id' => null,
+                'source' => 'local',
+            ]);
 
         $snapshot->fill([
             'total_value_brl' => $totalValue,
             'total_value_usd' => null,
             'total_pnl' => $totalPnl ?? 0,
-            'snapshot_date' => now(),
+            'snapshot_date' => now('America/Sao_Paulo')->endOfDay()->microsecond(0),
+            'source' => 'local',
+            'reconstruction_status' => $coverage >= 100 ? 'complete' : 'partial',
+            'coverage_percentage' => $coverage,
             'data' => [
                 'assets' => $assets->map(fn (array $asset) => [
                     'symbol' => $asset['symbol'],
                     'quantity' => $asset['quantity'],
                     'value_brl' => $asset['value_brl'],
                 ])->values()->all(),
+                'unpriced_assets' => $unpricedAssets,
+                'coverage_basis' => 'assets_with_current_balance',
             ],
         ])->save();
     }
@@ -497,6 +542,25 @@ class PortfolioMetricsService
             'sharpe_ratio' => $standardDeviation > 0 ? round(($mean / $standardDeviation) * sqrt(365), 4) : null,
             'max_drawdown_pct' => round($maxDrawdown, 4),
         ];
+    }
+
+    private function resolvedSnapshotSource(PortfolioSnapshot $snapshot): string
+    {
+        if (data_get($snapshot->data, 'source') === 'binance_account_snapshot') {
+            return 'official';
+        }
+
+        return $snapshot->source ?? 'local';
+    }
+
+    private function snapshotSourcePriority(?string $source): int
+    {
+        return match ($source) {
+            'local' => 3,
+            'official' => 2,
+            'reconstructed' => 1,
+            default => 0,
+        };
     }
 
     private function diversificationScore(Collection $allocations): ?float

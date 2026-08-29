@@ -17,13 +17,30 @@
               <svg class="-ml-1 mr-2 h-4 w-4" :class="{ 'animate-spin': refreshing }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
               </svg>
-              {{ refreshing ? 'Atualizando...' : 'Atualizar' }}
+              {{ refreshing ? 'Atualizando...' : 'Atualizar saldos' }}
             </button>
+            <select v-model="selectedWallet" @change="loadWallet(selectedWallet)" class="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm text-gray-700 bg-white" aria-label="Filtrar por carteira">
+              <option :value="null">Todas as carteiras</option>
+              <option v-for="wallet in wallets" :key="wallet.id" :value="wallet.id">{{ wallet.name }}</option>
+            </select>
             <select v-model="selectedPeriod" @change="loadPeriod(selectedPeriod)" class="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm text-gray-700 bg-white">
               <option v-for="period in periods" :key="period.value" :value="period.value">{{ period.label }}</option>
             </select>
           </div>
         </header>
+
+        <div v-if="reconstructionInProgress" class="mt-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900" role="status">
+          <strong>Reconstruindo evolução histórica.</strong> {{ reconstructionStatusLabel }} O gráfico será atualizado automaticamente ao concluir.
+        </div>
+        <div v-else-if="reconstructionSummary" class="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700" role="status">
+          {{ reconstructionSummary }}
+        </div>
+        <div v-if="flashSuccess" class="mt-4 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800" role="status">
+          {{ flashSuccess }}
+        </div>
+        <div v-if="flashError" class="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800" role="alert">
+          {{ flashError }}
+        </div>
 
         <div class="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4 mt-6">
           <StatCard
@@ -60,7 +77,7 @@
               <div class="px-6 py-4 border-b border-gray-200 flex flex-wrap gap-3 items-center justify-between">
                 <div>
                   <h3 class="text-lg font-medium text-gray-900">Evolução do Portfólio</h3>
-                  <p class="text-xs text-gray-500 mt-1">Série formada por snapshots reais salvos ao atualizar o Portfólio.</p>
+                  <p class="text-xs text-gray-500 mt-1">Série formada por snapshots oficiais, registros locais e saldos reconstruídos a partir das transações.</p>
                 </div>
                 <div class="flex flex-wrap gap-1">
                   <button
@@ -91,8 +108,12 @@
                     <span>{{ chartStartLabel }}</span>
                     <span>{{ chartEndLabel }}</span>
                   </div>
+                  <p v-if="historyCoverageMessage" class="mt-3 text-xs text-amber-700">{{ historyCoverageMessage }}</p>
+                  <div class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-600">
+                    <span v-for="source in historySources" :key="source.key"><strong>{{ source.label }}:</strong> {{ source.count }} ponto(s)</span>
+                  </div>
                 </div>
-                <EmptyState v-else title="Histórico ainda em formação" description="Atualize o Portfólio em dias diferentes para gerar a série de snapshots reais." />
+                <EmptyState v-else title="Histórico ainda em formação" description="Atualize os saldos para iniciar a reconstrução baseada em snapshots e transações já registradas." />
               </div>
             </section>
 
@@ -192,8 +213,8 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
-import { Link, router } from '@inertiajs/vue3'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { Link, router, usePage } from '@inertiajs/vue3'
 import AppLayout from '@/Layouts/AppLayout.vue'
 import StatCard from '@/Components/StatCard.vue'
 import EmptyState from '@/Components/EmptyState.vue'
@@ -214,10 +235,16 @@ const props = defineProps({
     }),
   },
   recentActivity: { type: Array, default: () => [] },
+  wallets: { type: Array, default: () => [] },
+  reconstructionSession: { type: Object, default: null },
 })
 
+const page = usePage()
 const refreshing = ref(false)
 const selectedPeriod = ref(props.portfolio.period || '30d')
+const selectedWallet = ref(props.portfolio.wallet_id ?? null)
+const flashSuccess = computed(() => page.props.flash?.success || '')
+const flashError = computed(() => page.props.flash?.error || '')
 const periods = [
   { value: '24h', label: '24 horas' }, { value: '7d', label: '7 dias' },
   { value: '30d', label: '30 dias' }, { value: '90d', label: '90 dias' },
@@ -226,6 +253,33 @@ const periods = [
 const chartPeriods = periods.filter((period) => period.value !== 'all')
 
 const chartPoints = computed(() => Array.isArray(props.portfolio.history?.data) ? props.portfolio.history.data : [])
+const reconstructionInProgress = computed(() => ['pending', 'processing', 'pricing'].includes(props.reconstructionSession?.status))
+const reconstructionStatusLabel = computed(() => {
+  const status = props.reconstructionSession?.status
+  if (status === 'pending') return 'Aguardando o worker de fila.'
+  if (status === 'pricing') return 'Calculando preços históricos.'
+  return 'Revertendo transações por carteira e consolidando os saldos.'
+})
+const reconstructionSummary = computed(() => {
+  const session = props.reconstructionSession
+  if (!session || session.status !== 'completed') return ''
+  const result = session.settings?.result || {}
+  if (!result.snapshots_written) return 'A última reconstrução não gerou novos pontos históricos.'
+  const partial = Number(result.partial_snapshots || 0)
+  return `${result.snapshots_written} ponto(s) histórico(s) atualizados${partial > 0 ? `; ${partial} com cobertura parcial` : ''}.`
+})
+const historySources = computed(() => {
+  const labels = { official: 'Oficial', local: 'Local', reconstructed: 'Reconstruído' }
+  return Object.entries(labels)
+    .map(([key, label]) => ({ key, label, count: chartPoints.value.filter((point) => point.source === key).length }))
+    .filter((source) => source.count > 0)
+})
+const historyCoverageMessage = computed(() => {
+  const partialPoints = chartPoints.value.filter((point) => point.reconstruction_status === 'partial')
+  if (!partialPoints.length) return ''
+  const minimum = Math.min(...partialPoints.map((point) => Number(point.coverage_percentage) || 0))
+  return `Há ${partialPoints.length} ponto(s) parcialmente precificado(s). A menor cobertura de preços é ${formatPercentage(minimum)}; valores ausentes não foram tratados como zero.`
+})
 const chartLinePath = computed(() => buildChartPaths(chartPoints.value).line)
 const chartAreaPath = computed(() => buildChartPaths(chartPoints.value).area)
 const chartStartLabel = computed(() => chartPoints.value[0] ? `${formatDate(chartPoints.value[0].date)} · ${formatCurrency(chartPoints.value[0].value_brl)}` : '')
@@ -252,10 +306,46 @@ const refreshPortfolio = () => {
   })
 }
 
+const loadPortfolio = () => {
+  const query = { period: selectedPeriod.value }
+  if (selectedWallet.value) query.wallet_id = selectedWallet.value
+  router.get('/portfolio', query, {
+    preserveScroll: true,
+    preserveState: true,
+    only: ['portfolio', 'recentActivity', 'wallets', 'reconstructionSession'],
+  })
+}
+
 const loadPeriod = (period) => {
   selectedPeriod.value = period
-  router.get('/portfolio', { period }, { preserveScroll: true, preserveState: true, only: ['portfolio', 'recentActivity'] })
+  loadPortfolio()
 }
+
+const loadWallet = (walletId) => {
+  selectedWallet.value = walletId || null
+  loadPortfolio()
+}
+
+let reconstructionPoll = null
+const stopReconstructionPolling = () => {
+  if (reconstructionPoll) {
+    window.clearTimeout(reconstructionPoll)
+    reconstructionPoll = null
+  }
+}
+const pollReconstruction = () => {
+  stopReconstructionPolling()
+  if (!reconstructionInProgress.value) return
+  reconstructionPoll = window.setTimeout(() => {
+    router.reload({
+      only: ['portfolio', 'reconstructionSession'],
+      onFinish: pollReconstruction,
+    })
+  }, 4000)
+}
+watch(reconstructionInProgress, pollReconstruction, { immediate: true })
+onMounted(pollReconstruction)
+onBeforeUnmount(stopReconstructionPolling)
 
 const buildChartPaths = (points) => {
   if (points.length < 2) return { line: '', area: '' }

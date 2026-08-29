@@ -103,10 +103,14 @@ class BinancePortfolioSyncServiceTest extends TestCase
         Schema::create('portfolio_snapshots', function (Blueprint $table) {
             $table->id();
             $table->unsignedBigInteger('portfolio_id');
+            $table->unsignedBigInteger('wallet_id')->nullable();
             $table->decimal('total_value_brl', 20, 2);
             $table->decimal('total_value_usd', 20, 2)->nullable();
             $table->decimal('total_pnl', 20, 2)->nullable();
             $table->dateTime('snapshot_date');
+            $table->string('source')->default('local');
+            $table->string('reconstruction_status')->default('complete');
+            $table->decimal('coverage_percentage', 5, 2)->default(100);
             $table->json('data')->nullable();
             $table->timestamps();
         });
@@ -218,6 +222,7 @@ class BinancePortfolioSyncServiceTest extends TestCase
         $this->assertSame(0, $result['historical_snapshots_unpriced']);
         $this->assertDatabaseCount('portfolio_snapshots', 2);
         $this->assertEquals(5000.0, PortfolioSnapshot::query()->orderBy('snapshot_date')->first()->total_value_brl);
-        $this->assertSame('binance_account_snapshot', PortfolioSnapshot::query()->first()->data['source']);
+        $this->assertSame('official', PortfolioSnapshot::query()->first()->source);
+        $this->assertSame('binance_account_snapshot', PortfolioSnapshot::query()->first()->data['source_detail']);
     }
 }

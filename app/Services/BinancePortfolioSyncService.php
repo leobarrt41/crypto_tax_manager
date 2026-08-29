@@ -144,9 +144,21 @@ class BinancePortfolioSyncService
      */
     private function importDailyAccountSnapshots(User $user, Collection $apiKeys, array &$result): void
     {
-        $snapshotsByDate = [];
+        $portfolio = Portfolio::query()->firstOrCreate(
+            ['user_id' => $user->id, 'name' => 'Portfolio Principal'],
+            ['is_active' => true],
+        );
 
         foreach ($apiKeys as $apiKey) {
+            $wallet = Wallet::query()
+                ->where('user_id', $user->id)
+                ->where('address', "exchange:binance:api-key:{$apiKey->id}")
+                ->first();
+
+            if ($wallet === null) {
+                continue;
+            }
+
             try {
                 foreach ($this->fetchDailyAccountSnapshots($apiKey) as $snapshot) {
                     $timestamp = (int) ($snapshot['updateTime'] ?? 0);
@@ -154,23 +166,49 @@ class BinancePortfolioSyncService
                         continue;
                     }
 
-                    $date = Carbon::createFromTimestampMs($timestamp, 'UTC')->startOfDay();
-                    $dateKey = $date->toDateString();
-                    $snapshotsByDate[$dateKey] ??= [
-                        'date' => $date,
-                        'total_btc' => 0.0,
-                        'assets' => [],
-                    ];
-                    $snapshotsByDate[$dateKey]['total_btc'] += (float) data_get($snapshot, 'data.totalAssetOfBtc', 0);
-
-                    foreach ((array) data_get($snapshot, 'data.balances', []) as $balance) {
-                        $symbol = strtoupper(trim((string) ($balance['asset'] ?? '')));
-                        $quantity = (float) ($balance['free'] ?? 0) + (float) ($balance['locked'] ?? 0);
-                        if ($symbol !== '' && $quantity > 0) {
-                            $snapshotsByDate[$dateKey]['assets'][$symbol] =
-                                ($snapshotsByDate[$dateKey]['assets'][$symbol] ?? 0.0) + $quantity;
-                        }
+                    $date = Carbon::createFromTimestampMs($timestamp, 'UTC')
+                        ->timezone('America/Sao_Paulo')
+                        ->startOfDay();
+                    $btcPrice = $this->priceService->getOrCreatePrice('BTC', $date);
+                    $btcPriceBrl = (float) ($btcPrice->price_brl ?? 0);
+                    if ($btcPriceBrl <= 0) {
+                        $result['historical_snapshots_unpriced']++;
+                        continue;
                     }
+
+                    $assets = collect((array) data_get($snapshot, 'data.balances', []))
+                        ->map(function (array $balance) {
+                            $symbol = strtoupper(trim((string) ($balance['asset'] ?? '')));
+                            $quantity = (float) ($balance['free'] ?? 0) + (float) ($balance['locked'] ?? 0);
+
+                            return ['symbol' => $symbol, 'quantity' => $quantity];
+                        })
+                        ->filter(fn (array $balance) => $balance['symbol'] !== '' && $balance['quantity'] > 0)
+                        ->values()
+                        ->all();
+                    $totalBtc = (float) data_get($snapshot, 'data.totalAssetOfBtc', 0);
+
+                    PortfolioSnapshot::query()->updateOrCreate(
+                        [
+                            'portfolio_id' => $portfolio->id,
+                            'wallet_id' => $wallet->id,
+                            'snapshot_date' => $date,
+                            'source' => 'official',
+                        ],
+                        [
+                            'total_value_brl' => round($totalBtc * $btcPriceBrl, 2),
+                            'total_value_usd' => null,
+                            'total_pnl' => null,
+                            'reconstruction_status' => 'complete',
+                            'coverage_percentage' => 100,
+                            'data' => [
+                                'source_detail' => 'binance_account_snapshot',
+                                'total_asset_btc' => $totalBtc,
+                                'assets' => $assets,
+                            ],
+                        ],
+                    );
+                    $result['historical_snapshots_imported']++;
                 }
             } catch (\Throwable $exception) {
                 // O histórico é complementar: uma restrição desse endpoint não
@@ -181,53 +219,6 @@ class BinancePortfolioSyncService
                     'error' => $exception->getMessage(),
                 ]);
             }
-        }
-
-        if ($snapshotsByDate === []) {
-            return;
-        }
-
-        $portfolio = Portfolio::query()->firstOrCreate(
-            ['user_id' => $user->id, 'name' => 'Portfolio Principal'],
-            ['is_active' => true],
-        );
-
-        ksort($snapshotsByDate);
-        foreach ($snapshotsByDate as $snapshotData) {
-            $existing = PortfolioSnapshot::query()
-                ->where('portfolio_id', $portfolio->id)
-                ->whereDate('snapshot_date', $snapshotData['date'])
-                ->first();
-
-            // Um snapshot calculado pelo próprio sistema possui custo e P&L e é
-            // mais completo; nunca o substituímos pelo resumo vindo da Binance.
-            if ($existing && data_get($existing->data, 'source') !== 'binance_account_snapshot') {
-                continue;
-            }
-
-            $btcPrice = $this->priceService->getOrCreatePrice('BTC', $snapshotData['date']);
-            $btcPriceBrl = (float) ($btcPrice->price_brl ?? 0);
-            if ($btcPriceBrl <= 0) {
-                $result['historical_snapshots_unpriced']++;
-                continue;
-            }
-
-            $historicalSnapshot = $existing ?? new PortfolioSnapshot();
-            $historicalSnapshot->fill([
-                'portfolio_id' => $portfolio->id,
-                'total_value_brl' => round($snapshotData['total_btc'] * $btcPriceBrl, 2),
-                'total_value_usd' => null,
-                'total_pnl' => null,
-                'snapshot_date' => $snapshotData['date'],
-                'data' => [
-                    'source' => 'binance_account_snapshot',
-                    'total_asset_btc' => $snapshotData['total_btc'],
-                    'assets' => collect($snapshotData['assets'])->map(
-                        fn (float $quantity, string $symbol) => compact('symbol', 'quantity')
-                    )->values()->all(),
-                ],
-            ])->save();
-            $result['historical_snapshots_imported']++;
         }
     }
 

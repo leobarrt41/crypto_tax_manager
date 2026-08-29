@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\CryptoAsset;
+use App\Models\PortfolioSnapshot;
 use App\Models\Transaction;
 use App\Models\User;
 use App\Models\Wallet;
@@ -99,10 +100,14 @@ class PortfolioMetricsServiceTest extends TestCase
         Schema::create('portfolio_snapshots', function (Blueprint $table) {
             $table->id();
             $table->unsignedBigInteger('portfolio_id');
+            $table->unsignedBigInteger('wallet_id')->nullable();
             $table->decimal('total_value_brl', 20, 2);
             $table->decimal('total_value_usd', 20, 2)->nullable();
             $table->decimal('total_pnl', 20, 2);
             $table->dateTime('snapshot_date');
+            $table->string('source')->default('local');
+            $table->string('reconstruction_status')->default('complete');
+            $table->decimal('coverage_percentage', 5, 2)->default(100);
             $table->json('data')->nullable();
             $table->timestamps();
         });
@@ -162,5 +167,30 @@ class PortfolioMetricsServiceTest extends TestCase
         $this->assertSame(1.2, $overview['assets'][0]['quantity']);
         $this->assertSame(1, $overview['assets'][0]['wallets_count']);
         $this->assertDatabaseCount('portfolio_snapshots', 1);
+    }
+
+    public function test_filters_metrics_by_wallet_without_overwriting_the_consolidated_snapshot(): void
+    {
+        $user = User::query()->create([
+            'name' => 'Pessoa de Teste',
+            'email' => 'portfolio-wallet@example.test',
+            'password' => 'secret',
+        ]);
+        $firstWallet = Wallet::query()->create(['user_id' => $user->id, 'name' => 'Binance']);
+        $secondWallet = Wallet::query()->create(['user_id' => $user->id, 'name' => 'Carteira externa']);
+        CryptoAsset::query()->create(['symbol' => 'BTC', 'name' => 'Bitcoin', 'current_price_brl' => 300000]);
+        CryptoAsset::query()->create(['symbol' => 'ETH', 'name' => 'Ethereum', 'current_price_brl' => 10000]);
+        WalletBalance::query()->create(['wallet_id' => $firstWallet->id, 'asset' => 'BTC', 'available' => 1, 'locked' => 0]);
+        WalletBalance::query()->create(['wallet_id' => $secondWallet->id, 'asset' => 'ETH', 'available' => 2, 'locked' => 0]);
+
+        $metrics = app(PortfolioMetricsService::class);
+        $consolidated = $metrics->overview($user);
+        $snapshotCount = PortfolioSnapshot::query()->count();
+        $filtered = $metrics->overview($user, '30d', $firstWallet->id);
+
+        $this->assertSame(320000.0, $consolidated['total_value']);
+        $this->assertSame(300000.0, $filtered['total_value']);
+        $this->assertSame(1, $filtered['wallets_count']);
+        $this->assertSame($snapshotCount, PortfolioSnapshot::query()->count());
     }
 }

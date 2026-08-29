@@ -12,10 +12,14 @@ class PortfolioSnapshot extends Model
 
     protected $fillable = [
         'portfolio_id',
+        'wallet_id',
         'total_value_brl',
         'total_value_usd',
         'total_pnl',
         'snapshot_date',
+        'source',
+        'reconstruction_status',
+        'coverage_percentage',
         'data',
     ];
 
@@ -24,11 +28,17 @@ class PortfolioSnapshot extends Model
         'total_value_usd' => 'decimal:2',
         'total_pnl' => 'decimal:2',
         'snapshot_date' => 'datetime',
+        'coverage_percentage' => 'decimal:2',
         'data' => 'array',
     ];
 
     public function portfolio(): BelongsTo
     {
         return $this->belongsTo(Portfolio::class);
+    }
+
+    public function wallet(): BelongsTo
+    {
+        return $this->belongsTo(Wallet::class);
     }
 }

@@ -29,6 +29,15 @@ class Transaction extends Model
         'date',
         'source_type',
         'source_id',
+        'symbol',
+        'order_id',
+        'trade_id',
+        'qty',
+        'quote_qty',
+        'commission',
+        'commission_asset',
+        'side',
+        'executed_at',
     ];
 
     protected $casts = [
@@ -40,6 +49,10 @@ class Transaction extends Model
         'total_brl' => 'decimal:10',
         'pricing_attempts' => 'integer',
         'pricing_last_attempted_at' => 'datetime',
+        'qty' => 'decimal:12',
+        'quote_qty' => 'decimal:12',
+        'commission' => 'decimal:12',
+        'executed_at' => 'datetime',
     ];
 
     /**

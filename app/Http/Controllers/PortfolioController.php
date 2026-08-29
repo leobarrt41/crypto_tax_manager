@@ -2,10 +2,14 @@
 
 namespace App\Http\Controllers;
 
+use App\Jobs\RebuildPortfolioHistory;
 use App\Models\CryptoAsset;
+use App\Models\ImportSession;
+use App\Models\Wallet;
 use App\Services\BinancePortfolioSyncService;
 use App\Services\PortfolioMetricsService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -27,20 +31,24 @@ class PortfolioController extends Controller
     {
         $period = $this->period($request);
         $user = $request->user();
+        $walletId = $this->walletId($request);
 
         return Inertia::render('Portfolio/Index', [
-            'portfolio' => $this->metrics->overview($user, $period),
+            'portfolio' => $this->metrics->overview($user, $period, $walletId),
             'recentActivity' => $this->metrics->recentActivity($user),
+            'wallets' => $user->wallets()->orderBy('name')->get(['id', 'name', 'description']),
+            'reconstructionSession' => $this->latestReconstructionSession($user->id),
         ]);
     }
 
     public function analytics(Request $request): Response
     {
         $period = $this->period($request);
+        $walletId = $this->walletId($request);
 
         return Inertia::render('Portfolio/Analytics', [
-            'portfolio' => $this->metrics->overview($request->user(), $period),
-            'performance' => $this->metrics->performance($request->user(), $period),
+            'portfolio' => $this->metrics->overview($request->user(), $period, $walletId),
+            'performance' => $this->metrics->performance($request->user(), $period, $walletId),
         ]);
     }
 
@@ -49,14 +57,14 @@ class PortfolioController extends Controller
         $period = $this->period($request);
 
         return Inertia::render('Portfolio/Performance', [
-            'performance' => $this->metrics->performance($request->user(), $period),
+            'performance' => $this->metrics->performance($request->user(), $period, $this->walletId($request)),
         ]);
     }
 
     public function allocation(Request $request): Response
     {
         return Inertia::render('Portfolio/Allocation', [
-            'allocation' => $this->metrics->allocation($request->user()),
+            'allocation' => $this->metrics->allocation($request->user(), $this->walletId($request)),
         ]);
     }
 
@@ -67,7 +75,8 @@ class PortfolioController extends Controller
     public function refresh(Request $request)
     {
         try {
-            $result = $this->binanceBalanceSync->sync($request->user());
+            $user = $request->user();
+            $result = $this->binanceBalanceSync->sync($user);
 
             if ($result['keys_processed'] === 0) {
                 return back()->with('error', 'Nenhuma chave Binance foi encontrada para atualizar o Portfólio.');
@@ -77,11 +86,39 @@ class PortfolioController extends Controller
             $pricesLabel = $result['prices_updated'] === 1 ? 'preço atualizado' : 'preços atualizados';
             $unavailableAssetsLabel = $result['prices_unavailable'] === 1 ? 'ativo' : 'ativos';
             $historyMessage = $result['historical_snapshots_imported'] > 0
-                ? sprintf('; %d snapshots históricos Binance sincronizados', $result['historical_snapshots_imported'])
+                ? sprintf('; %d snapshots oficiais Binance sincronizados', $result['historical_snapshots_imported'])
                 : '';
+            $lock = Cache::lock("portfolio-history-reconstruction:{$user->id}", 30);
+            if ($lock->get()) {
+                try {
+                    $inProgress = $this->latestReconstructionSession($user->id, true);
+                    if ($inProgress === null) {
+                        $inProgress = ImportSession::query()->create([
+                            'user_id' => $user->id,
+                            'type' => 'portfolio_reconstruction',
+                            'source' => 'portfolio_history',
+                            'status' => 'pending',
+                            'total_rows' => 366,
+                            'processed_rows' => 0,
+                            'successful_rows' => 0,
+                            'failed_rows' => 0,
+                            'progress_percentage' => 0,
+                            'settings' => ['period' => '1y', 'origin' => 'user_refresh'],
+                        ]);
+                        RebuildPortfolioHistory::dispatch($user->id, $inProgress->id);
+                        $reconstructionMessage = ' A reconstrução histórica de até um ano foi iniciada em segundo plano.';
+                    } else {
+                        $reconstructionMessage = ' A reconstrução histórica já está em andamento.';
+                    }
+                } finally {
+                    $lock->release();
+                }
+            } else {
+                $reconstructionMessage = ' A solicitação de reconstrução está sendo preparada. Aguarde alguns segundos.';
+            }
 
             return back()->with('success', sprintf(
-                'Portfólio atualizado: %d %s com saldo; %d %s%s%s.',
+                'Portfólio atualizado: %d %s com saldo; %d %s%s%s.%s',
                 $result['assets_with_balance'],
                 $assetsLabel,
                 $result['prices_updated'],
@@ -90,6 +127,7 @@ class PortfolioController extends Controller
                     ? "; {$result['prices_unavailable']} {$unavailableAssetsLabel} sem preço atual disponível"
                     : '',
                 $historyMessage,
+                $reconstructionMessage,
             ));
         } catch (\Throwable $exception) {
             report($exception);
@@ -103,7 +141,7 @@ class PortfolioController extends Controller
      */
     public function apiSummary(Request $request)
     {
-        return response()->json($this->metrics->overview($request->user(), $this->period($request)));
+        return response()->json($this->metrics->overview($request->user(), $this->period($request), $this->walletId($request)));
     }
 
     /**
@@ -112,12 +150,12 @@ class PortfolioController extends Controller
      */
     public function apiChartData(Request $request)
     {
-        return response()->json($this->metrics->history($request->user(), $this->period($request)));
+        return response()->json($this->metrics->history($request->user(), $this->period($request), $this->walletId($request)));
     }
 
     public function apiAllocationData(Request $request)
     {
-        return response()->json($this->metrics->allocation($request->user()));
+        return response()->json($this->metrics->allocation($request->user(), $this->walletId($request)));
     }
 
     /**
@@ -181,6 +219,31 @@ class PortfolioController extends Controller
             'assets_count' => $portfolio['assets_count'],
             'allocations' => $portfolio['allocations'],
         ]);
+    }
+
+    private function latestReconstructionSession(int $userId, bool $onlyInProgress = false): ?ImportSession
+    {
+        return ImportSession::query()
+            ->where('user_id', $userId)
+            ->where('type', 'portfolio_reconstruction')
+            ->when($onlyInProgress, fn ($query) => $query->whereIn('status', ['pending', 'processing', 'pricing']))
+            ->latest('id')
+            ->first();
+    }
+
+    private function walletId(Request $request): ?int
+    {
+        $walletId = $request->integer('wallet_id');
+        if ($walletId <= 0) {
+            return null;
+        }
+
+        abort_unless(
+            Wallet::query()->where('user_id', $request->user()->id)->whereKey($walletId)->exists(),
+            404,
+        );
+
+        return $walletId;
     }
 
     private function period(Request $request): string
