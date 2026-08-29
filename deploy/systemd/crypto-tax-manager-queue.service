@@ -1,0 +1,19 @@
+[Unit]
+Description=Crypto Tax Manager - Laravel queue worker
+After=network.target
+
+[Service]
+Type=simple
+User=__APP_USER__
+Group=__APP_GROUP__
+WorkingDirectory=__PROJECT_PATH__
+ExecStart=__PHP_BINARY__ __PROJECT_PATH__/artisan queue:work database --queue=default --sleep=3 --tries=1 --timeout=3600 --max-time=3600
+ExecReload=__PHP_BINARY__ __PROJECT_PATH__/artisan queue:restart
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=3700
+Environment=APP_ENV=production
+
+[Install]
+WantedBy=multi-user.target

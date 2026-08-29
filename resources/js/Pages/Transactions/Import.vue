@@ -106,10 +106,28 @@
                 </p>
               </div>
 
+              <div v-if="syncSession" class="mb-4 rounded-md border p-3" :class="syncStatusPanelClass">
+                <div class="flex items-start justify-between gap-3">
+                  <div>
+                    <p class="text-sm font-medium">Sincronização {{ exchangeForm.year }}</p>
+                    <p class="mt-1 text-xs">{{ syncStatusMessage }}</p>
+                    <p v-if="syncSession.status === 'completed'" class="mt-1 text-xs">
+                      {{ syncSession.transactions_imported }} transações encontradas. A cobertura foi atualizada automaticamente.
+                    </p>
+                    <p v-else-if="syncSession.status === 'failed' && syncSession.error" class="mt-1 text-xs">
+                      {{ syncSession.error }}
+                    </p>
+                  </div>
+                  <span class="inline-flex shrink-0 items-center rounded-full px-2.5 py-0.5 text-xs font-medium" :class="syncStatusBadgeClass">
+                    {{ syncStatusLabel }}
+                  </span>
+                </div>
+              </div>
+
               <!-- Import Button -->
               <button
                 @click="importFromExchange"
-                :disabled="!exchangeForm.api_key_id || exchangeImporting"
+                :disabled="!exchangeForm.api_key_id || exchangeImporting || syncInProgress"
                 class="w-full inline-flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary hover:bg-primary-dark focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <span v-if="exchangeImporting" class="flex items-center">
@@ -118,6 +136,13 @@
                     <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                   </svg>
                   Importando...
+                </span>
+                <span v-else-if="syncInProgress" class="flex items-center">
+                  <svg class="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  Sincronização em andamento
                 </span>
                 <span v-else>
                   <svg class="-ml-1 mr-2 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -500,7 +525,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onBeforeUnmount, onMounted, watch } from 'vue'
 import { router } from '@inertiajs/vue3'
 import AppLayout from '@/Layouts/AppLayout.vue'
 import { Link } from '@inertiajs/vue3'
@@ -591,9 +616,39 @@ const csvImporting = ref(false)
 const coverage = ref(null)
 const coverageLoading = ref(false)
 const coverageError = ref('')
+const syncSession = ref(null)
+const syncStatusError = ref('')
+let syncStatusTimer = null
 const csvPreview = ref([])
 const csvHeaders = ref([])
 const csvFileInput = ref(null)
+const syncInProgress = computed(() => ['pending', 'processing'].includes(syncSession.value?.status))
+const syncStatusLabel = computed(() => ({
+  pending: 'Na fila',
+  processing: 'Em andamento',
+  completed: 'Concluída',
+  failed: 'Falhou',
+}[syncSession.value?.status] || 'Sem sincronização'))
+const syncStatusPanelClass = computed(() => ({
+  pending: 'border-amber-200 bg-amber-50 text-amber-900',
+  processing: 'border-blue-200 bg-blue-50 text-blue-900',
+  completed: 'border-green-200 bg-green-50 text-green-900',
+  failed: 'border-red-200 bg-red-50 text-red-900',
+}[syncSession.value?.status] || 'border-gray-200 bg-gray-50 text-gray-700'))
+const syncStatusBadgeClass = computed(() => ({
+  pending: 'bg-amber-100 text-amber-800',
+  processing: 'bg-blue-100 text-blue-800',
+  completed: 'bg-green-100 text-green-800',
+  failed: 'bg-red-100 text-red-800',
+}[syncSession.value?.status] || 'bg-gray-100 text-gray-700'))
+const syncStatusMessage = computed(() => {
+  if (syncSession.value?.status === 'pending') return 'A sincronização foi solicitada e será iniciada automaticamente pelo servidor.'
+  if (syncSession.value?.status === 'processing') return 'A Binance está sendo consultada. Você pode navegar pelo sistema; esta tela se atualizará automaticamente.'
+  if (syncSession.value?.status === 'completed') return 'Sincronização concluída. Revise abaixo quais CSVs ainda são recomendados para conferência.'
+  if (syncSession.value?.status === 'failed') return 'A sincronização não foi concluída. Revise a mensagem e tente novamente.'
+  return syncStatusError.value || 'Nenhuma sincronização foi iniciada para esta chave e ano.'
+})
+
 const canSubmitFileImport = computed(() => {
   const hasBaseFields = Boolean(csvForm.value.file && csvForm.value.source_type && csvForm.value.source_id)
   const hasBinanceCoverageFields = !isBinanceCsvSource.value || Boolean(
@@ -644,6 +699,9 @@ const loadExchangeKeys = () => {
   exchangeForm.value.api_key_id = ''
   coverage.value = null
   coverageError.value = ''
+  syncSession.value = null
+  syncStatusError.value = ''
+  stopSyncStatusPolling()
 }
 
 const loadCoverage = async () => {
@@ -675,6 +733,56 @@ const loadCoverage = async () => {
     coverageError.value = error instanceof Error ? error.message : 'Não foi possível consultar a cobertura da importação.'
   } finally {
     coverageLoading.value = false
+  }
+}
+
+const stopSyncStatusPolling = () => {
+  if (syncStatusTimer) {
+    window.clearTimeout(syncStatusTimer)
+    syncStatusTimer = null
+  }
+}
+
+const scheduleSyncStatusPolling = () => {
+  stopSyncStatusPolling()
+  if (syncInProgress.value) {
+    syncStatusTimer = window.setTimeout(loadSyncStatus, 3000)
+  }
+}
+
+const loadSyncStatus = async () => {
+  if (!isBinanceExchange.value || !exchangeForm.value.api_key_id || !exchangeForm.value.year) {
+    syncSession.value = null
+    stopSyncStatusPolling()
+    return
+  }
+
+  try {
+    const query = new URLSearchParams({
+      api_key_id: String(exchangeForm.value.api_key_id),
+      year: String(exchangeForm.value.year),
+    })
+    const response = await fetch(`${route('transactions.import-status')}?${query.toString()}`, {
+      headers: { Accept: 'application/json' },
+    })
+    const payload = await response.json().catch(() => ({}))
+
+    if (!response.ok) {
+      throw new Error(payload.message || 'Não foi possível consultar o andamento da sincronização.')
+    }
+
+    const previousStatus = syncSession.value?.status
+    syncSession.value = payload.session
+    syncStatusError.value = ''
+
+    if (payload.session?.status === 'completed' && previousStatus !== 'completed') {
+      loadCoverage()
+    }
+  } catch (error) {
+    syncSession.value = null
+    syncStatusError.value = error instanceof Error ? error.message : 'Não foi possível consultar o andamento da sincronização.'
+  } finally {
+    scheduleSyncStatusPolling()
   }
 }
 
@@ -719,7 +827,7 @@ const importFromExchange = () => {
     {
       preserveScroll: true,
       onSuccess: () => {
-        window.setTimeout(loadCoverage, 800)
+        window.setTimeout(loadSyncStatus, 300)
       },
       onError: (errors) => {
         const firstError = Object.values(errors || {})[0]
@@ -821,10 +929,16 @@ watch(
   () => {
     csvForm.value.coverage_year = exchangeForm.value.year
     loadCoverage()
+    loadSyncStatus()
   },
 )
 
-onMounted(() => loadCoverage())
+onMounted(() => {
+  loadCoverage()
+  loadSyncStatus()
+})
+
+onBeforeUnmount(() => stopSyncStatusPolling())
 
 const viewImportDetails = (importId) => {
   router.visit(`/transactions/import/${importId}`)

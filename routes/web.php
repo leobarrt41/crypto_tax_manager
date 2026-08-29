@@ -95,6 +95,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
         
         // Ações em Massa
         Route::delete('/delete-all', [TransactionController::class, 'destroyAll'])->name('destroyAll');
+        Route::get('/import-status', [TransactionController::class, 'importStatus'])->name('import-status');
         Route::post('/import/csv', [TransactionController::class, 'importCsv'])->name('import.csv');
         Route::post('/export/{format}', [TransactionController::class, 'export'])->name('export');
     

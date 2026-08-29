@@ -12,6 +12,7 @@ use App\Jobs\ProcessBinanceImport;
 use App\Models\Transaction;
 use App\Models\UserApiKey;
 use App\Models\CryptoAsset;
+use App\Models\ImportSession;
 use App\Services\FifoCalculatorService;
 use App\Services\BinanceImportService; // ✅ Importa o novo serviço
 use App\Services\CryptoPriceService;
@@ -500,9 +501,32 @@ public function destroyAll()
             ->whereHas('exchange', fn ($query) => $query->where('name', 'binance'))
             ->firstOrFail();
 
-        ProcessBinanceImport::dispatch($request->user(), $apiKey->id, (int) $validated['year']);
+        $existingSession = $this->latestBinanceImportSession(
+            $request->user()->id,
+            $apiKey->id,
+            (int) $validated['year'],
+        );
 
-        return back()->with('success', "Sincronização Binance de {$validated['year']} iniciada. A cobertura será atualizada ao término do processamento.");
+        if ($existingSession?->isInProgress()) {
+            return back()->with('warning', "A sincronização Binance de {$validated['year']} já está em andamento.");
+        }
+
+        $session = ImportSession::query()->create([
+            'user_id' => $request->user()->id,
+            'type' => 'exchange_sync',
+            'source' => 'binance',
+            'status' => 'pending',
+            'settings' => [
+                'api_key_id' => $apiKey->id,
+                'exchange_id' => $apiKey->exchange_id,
+                'year' => (int) $validated['year'],
+            ],
+            'progress_percentage' => 0,
+        ]);
+
+        ProcessBinanceImport::dispatch($request->user(), $apiKey->id, (int) $validated['year'], $session->id);
+
+        return back()->with('success', "Sincronização Binance de {$validated['year']} iniciada. O andamento será atualizado automaticamente nesta tela.");
     }
 
     public function importCoverage(Request $request, TransactionImportCoverageService $coverageService)
@@ -531,6 +555,68 @@ public function destroyAll()
 
             throw $exception;
         }
+    }
+
+    /**
+     * Retorna o último job de sincronização da chave e do ano selecionados.
+     * A interface consulta este endpoint em intervalos curtos enquanto o job está ativo.
+     */
+    public function importStatus(Request $request): \Illuminate\Http\JsonResponse
+    {
+        $validated = $request->validate([
+            'api_key_id' => ['required', 'integer'],
+            'year' => ['required', 'integer', 'min:2009', 'max:' . now('America/Sao_Paulo')->year],
+        ]);
+
+        $apiKey = UserApiKey::query()
+            ->whereKey($validated['api_key_id'])
+            ->where('user_id', $request->user()->id)
+            ->whereHas('exchange', fn ($query) => $query->where('name', 'binance'))
+            ->firstOrFail();
+
+        try {
+            $session = $this->latestBinanceImportSession($request->user()->id, $apiKey->id, (int) $validated['year']);
+        } catch (\Illuminate\Database\QueryException $exception) {
+            if (str_contains($exception->getMessage(), 'import_sessions')) {
+                return response()->json([
+                    'message' => 'O acompanhamento de sincronização ainda não foi criado neste ambiente. Execute “php artisan migrate” e tente novamente.',
+                ], 409);
+            }
+
+            throw $exception;
+        }
+
+        return response()->json([
+            'session' => $session ? $this->serializeImportSession($session) : null,
+        ]);
+    }
+
+    private function latestBinanceImportSession(int $userId, int $apiKeyId, int $year): ?ImportSession
+    {
+        return ImportSession::query()
+            ->where('user_id', $userId)
+            ->where('type', 'exchange_sync')
+            ->where('source', 'binance')
+            ->latest('id')
+            ->get()
+            ->first(function (ImportSession $session) use ($apiKeyId, $year) {
+                return (int) data_get($session->settings, 'api_key_id') === $apiKeyId
+                    && (int) data_get($session->settings, 'year') === $year;
+            });
+    }
+
+    private function serializeImportSession(ImportSession $session): array
+    {
+        return [
+            'id' => $session->id,
+            'status' => $session->status,
+            'progress_percentage' => (float) $session->progress_percentage,
+            'started_at' => $session->started_at?->toIso8601String(),
+            'completed_at' => $session->completed_at?->toIso8601String(),
+            'transactions_imported' => (int) $session->successful_rows,
+            'result' => data_get($session->settings, 'result'),
+            'error' => data_get($session->errors, 'message'),
+        ];
     }
 
     /**
