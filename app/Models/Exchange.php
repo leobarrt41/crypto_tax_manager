@@ -6,7 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 
 class Exchange extends Model
 {
-    protected $fillable = ['name', 'country'];
+    protected $fillable = ['name', 'country_code', 'description'];
 
     public function apiKeys()
     {

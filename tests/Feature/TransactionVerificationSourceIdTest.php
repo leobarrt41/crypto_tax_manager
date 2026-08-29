@@ -19,7 +19,7 @@ class TransactionVerificationSourceIdTest extends TestCase
         parent::setUp();
 
         foreach (['transactions', 'users'] as $table) {
-            Schema::dropIfExists($table);
+            $this->dropTestTable($table);
         }
 
         Schema::create('users', function (Blueprint $table) {
@@ -58,7 +58,7 @@ class TransactionVerificationSourceIdTest extends TestCase
     protected function tearDown(): void
     {
         foreach (['transactions', 'users'] as $table) {
-            Schema::dropIfExists($table);
+            $this->dropTestTable($table);
         }
 
         Mockery::close();

@@ -28,15 +28,11 @@ class PortfolioHistoryReconstructionServiceTest extends TestCase
     {
         parent::setUp();
 
-        if (!str_contains(strtolower((string) config('database.connections.pgsql.database')), 'test')) {
-            throw new \RuntimeException('Teste bloqueado: configure um banco PostgreSQL dedicado contendo "test" no nome.');
-        }
-
         foreach ([
             'portfolio_snapshots', 'portfolios', 'transactions', 'wallet_balances', 'wallets',
             'networks', 'user_api_keys', 'crypto_asset_prices', 'crypto_assets', 'users',
         ] as $table) {
-            Schema::dropIfExists($table);
+            $this->dropTestTable($table);
         }
 
         Schema::create('users', function (Blueprint $table) {
@@ -159,7 +155,7 @@ class PortfolioHistoryReconstructionServiceTest extends TestCase
             'portfolio_snapshots', 'portfolios', 'transactions', 'wallet_balances', 'wallets',
             'networks', 'user_api_keys', 'crypto_asset_prices', 'crypto_assets', 'users',
         ] as $table) {
-            Schema::dropIfExists($table);
+            $this->dropTestTable($table);
         }
 
         Mockery::close();

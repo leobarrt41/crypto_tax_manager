@@ -15,7 +15,7 @@ class CryptoReportingRuleResolverTest extends TestCase
     {
         parent::setUp();
 
-        Schema::dropIfExists('crypto_reporting_rule_versions');
+        $this->dropTestTable('crypto_reporting_rule_versions');
         Schema::create('crypto_reporting_rule_versions', function (Blueprint $table) {
             $table->id();
             $table->string('code', 80)->unique();
@@ -70,7 +70,7 @@ class CryptoReportingRuleResolverTest extends TestCase
 
     protected function tearDown(): void
     {
-        Schema::dropIfExists('crypto_reporting_rule_versions');
+        $this->dropTestTable('crypto_reporting_rule_versions');
         parent::tearDown();
     }
 

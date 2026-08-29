@@ -17,7 +17,7 @@ class TransactionImportCoverageServiceTest extends TestCase
         parent::setUp();
 
         foreach (['transaction_import_coverages', 'transactions', 'user_api_keys', 'exchanges', 'users'] as $table) {
-            Schema::dropIfExists($table);
+            $this->dropTestTable($table);
         }
 
         Schema::create('users', function (Blueprint $table) {
@@ -83,7 +83,7 @@ class TransactionImportCoverageServiceTest extends TestCase
     protected function tearDown(): void
     {
         foreach (['transaction_import_coverages', 'transactions', 'user_api_keys', 'exchanges', 'users'] as $table) {
-            Schema::dropIfExists($table);
+            $this->dropTestTable($table);
         }
 
         parent::tearDown();

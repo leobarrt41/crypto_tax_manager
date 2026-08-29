@@ -25,7 +25,7 @@ class BinanceImportStatusTest extends TestCase
         $this->withoutMiddleware(VerifyCsrfToken::class);
 
         foreach (['import_sessions', 'user_api_keys', 'exchanges', 'users'] as $table) {
-            Schema::dropIfExists($table);
+            $this->dropTestTable($table);
         }
 
         Schema::create('users', function (Blueprint $table) {
@@ -81,7 +81,7 @@ class BinanceImportStatusTest extends TestCase
     protected function tearDown(): void
     {
         foreach (['import_sessions', 'user_api_keys', 'exchanges', 'users'] as $table) {
-            Schema::dropIfExists($table);
+            $this->dropTestTable($table);
         }
 
         parent::tearDown();

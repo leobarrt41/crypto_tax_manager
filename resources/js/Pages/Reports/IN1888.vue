@@ -336,16 +336,26 @@
                 <!-- Ações -->
                 <div class="flex space-x-3 pt-4 border-t border-gray-200">
                   <button
-                    @click="generateIN1888"
+                    @click="generateIN1888()"
                     :disabled="loading || !canGenerateLegacy"
-                    class="w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+                    class="flex-1 bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-lg font-medium transition-colors"
                   >
                     <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
                     </svg>
-                    Gerar e baixar arquivo legado
+                    Gerar arquivo da competência
+                  </button>
+                  <button
+                    @click="generateIN1888(true)"
+                    :disabled="loading || !canGenerateValidation"
+                    class="flex-1 bg-amber-600 hover:bg-amber-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+                  >
+                    Gerar arquivo de validação — não transmitir
                   </button>
                 </div>
+                <p v-if="canGenerateValidation && !monthStats.is_required" class="mt-3 text-xs text-amber-700">
+                  Este arquivo serve apenas para validar o leiaute no ColetaNac. A competência selecionada não foi classificada como obrigatória.
+                </p>
               </div>
             </div>
           </div>
@@ -474,6 +484,7 @@ const annualData = ref({ year: currentYear, months: [], summary: null })
 const currentRule = ref(null)
 const legacyExportAvailable = computed(() => currentRule.value?.legacy_export_available === true)
 const canGenerateLegacy = computed(() => legacyExportAvailable.value && monthStats.value.is_required === true)
+const canGenerateValidation = computed(() => legacyExportAvailable.value && Number(monthStats.value.total_operations) > 0)
 const obligationName = computed(() => currentRule.value?.obligation_name || 'Obrigação de criptoativos')
 const pageTitle = computed(() => `Declaração de criptoativos — ${obligationName.value}`)
 const selectedYearForStatus = computed(() => Number(form.value.year) || currentYear)
@@ -563,7 +574,7 @@ const getMonthName = (monthNumber) => {
   return months[monthNumber - 1] || ''
 }
 
-const generateIN1888 = async () => {
+const generateIN1888 = async (validationOnly = false) => {
   if (!form.value.year || !form.value.month) {
     alert('Por favor, selecione o período (mês e ano).')
     return
@@ -571,6 +582,16 @@ const generateIN1888 = async () => {
 
   if (!legacyExportAvailable.value) {
     alert('Esta competência é regida pela DeCripto. O arquivo legado da IN 1888 não pode ser gerado.')
+    return
+  }
+
+  if (!validationOnly && !canGenerateLegacy.value) {
+    alert('A geração oficial só é liberada quando a competência for obrigatória. Para teste técnico, use o arquivo de validação.')
+    return
+  }
+
+  if (validationOnly && !canGenerateValidation.value) {
+    alert('Não há operações representáveis nesta competência para gerar um arquivo de validação.')
     return
   }
 
@@ -585,7 +606,11 @@ const generateIN1888 = async () => {
         'X-Requested-With': 'XMLHttpRequest',
         ...(csrfToken ? { 'X-CSRF-TOKEN': csrfToken } : {})
       },
-      body: JSON.stringify({ month: Number(form.value.month), year: Number(form.value.year) })
+      body: JSON.stringify({
+        month: Number(form.value.month),
+        year: Number(form.value.year),
+        validation_only: validationOnly,
+      })
     })
     const payload = await response.json()
 
@@ -601,6 +626,10 @@ const generateIN1888 = async () => {
     link.download = payload.report.filename || `IN1888_${form.value.year}${String(form.value.month).padStart(2, '0')}.txt`
     link.click()
     URL.revokeObjectURL(url)
+
+    if (validationOnly) {
+      alert('Arquivo de validação baixado. Não transmita se a competência não for obrigatória.')
+    }
   } catch (error) {
     console.error('Erro ao gerar arquivo fiscal:', error)
     alert('Não foi possível processar a declaração. Tente novamente.')

@@ -23,8 +23,8 @@ class TransactionPeriodDeletionTest extends TestCase
         config(['app.key' => 'base64:MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=']);
         $this->withoutMiddleware(VerifyCsrfToken::class);
 
-        Schema::dropIfExists('transactions');
-        Schema::dropIfExists('users');
+        $this->dropTestTable('transactions');
+        $this->dropTestTable('users');
 
         Schema::create('users', function (Blueprint $table) {
             $table->id();
@@ -52,8 +52,8 @@ class TransactionPeriodDeletionTest extends TestCase
 
     protected function tearDown(): void
     {
-        Schema::dropIfExists('transactions');
-        Schema::dropIfExists('users');
+        $this->dropTestTable('transactions');
+        $this->dropTestTable('users');
 
         parent::tearDown();
     }

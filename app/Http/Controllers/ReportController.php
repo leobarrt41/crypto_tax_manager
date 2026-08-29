@@ -86,13 +86,15 @@ class ReportController extends Controller
         $validated = $request->validate([
             'month' => 'required|integer|min:1|max:12',
             'year' => 'required|integer|min:2019|max:' . date('Y'),
+            'validation_only' => 'nullable|boolean',
         ]);
 
         try {
             $report = $this->in1888Service->generateMonthlyFile(
                 auth()->id(),
                 (int) $validated['month'],
-                (int) $validated['year']
+                (int) $validated['year'],
+                (bool) ($validated['validation_only'] ?? false),
             );
 
             return response()->json([

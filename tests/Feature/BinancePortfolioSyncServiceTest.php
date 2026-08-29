@@ -22,12 +22,8 @@ class BinancePortfolioSyncServiceTest extends TestCase
     {
         parent::setUp();
 
-        if (!str_contains(strtolower((string) config('database.connections.pgsql.database')), 'test')) {
-            throw new \RuntimeException('Teste bloqueado: configure um banco PostgreSQL dedicado contendo "test" no nome.');
-        }
-
         foreach (['portfolio_snapshots', 'portfolios', 'wallet_balances', 'wallets', 'networks', 'user_api_keys', 'exchanges', 'crypto_assets', 'crypto_asset_prices', 'users'] as $table) {
-            Schema::dropIfExists($table);
+            $this->dropTestTable($table);
         }
 
         Schema::create('users', function (Blueprint $table) {
@@ -123,7 +119,7 @@ class BinancePortfolioSyncServiceTest extends TestCase
     protected function tearDown(): void
     {
         foreach (['portfolio_snapshots', 'portfolios', 'wallet_balances', 'wallets', 'networks', 'user_api_keys', 'exchanges', 'crypto_assets', 'crypto_asset_prices', 'users'] as $table) {
-            Schema::dropIfExists($table);
+            $this->dropTestTable($table);
         }
 
         Mockery::close();

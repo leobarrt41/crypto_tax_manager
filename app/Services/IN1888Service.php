@@ -2,400 +2,310 @@
 
 namespace App\Services;
 
-use App\Models\User;
 use App\Models\Transaction;
+use App\Models\User;
 use App\Models\UserApiKey;
 use Carbon\Carbon;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 
 /**
- * IN1888Service
+ * Gera o arquivo legado de operações por exchange estrangeira de forma somente leitura.
  *
- * Gera o arquivo de movimentação mensal de criptoativos no formato exigido
- * pela Instrução Normativa RFB nº 1.888/2019 (e alterações posteriores).
- *
- * Regras de obrigatoriedade:
- *  - Exchanges NACIONAIS (country = 'BR'): NÃO entram no arquivo.
- *    A obrigação de informar é da própria corretora, não do contribuinte.
- *  - Exchanges ESTRANGEIRAS e carteiras próprias: entram no cálculo do
- *    volume mensal e nos registros 0720.
- *  - Obrigatoriedade: volume mensal > R$ 30.000.
- *
- * Campos do model Transaction utilizados (corrigidos):
- *  - from_asset / to_asset  (não crypto_asset — campo inexistente)
- *  - from_amount / to_amount (não amount — campo inexistente)
- *  - total_brl               (não value_brl — campo inexistente)
- *  - price                   (preço unitário)
- *  - type                    (trade, convert, deposit, withdrawal, etc.)
- *  - source_type / source_id (para identificar a exchange via UserApiKey)
+ * A competência escolhe o regime. O leiaute legado é aceito apenas até 06/2026;
+ * competências DeCripto nunca recebem, por engano, arquivo da IN 1888.
  */
 class IN1888Service
 {
+    private const LEGACY_RECORD_LENGTHS = [
+        '0110' => 219,
+        '0120' => 219,
+        '0210' => 240,
+        '0410' => 204,
+        '0510' => 204,
+        '0710' => 204,
+        '0720' => 204,
+    ];
+
     public function __construct(private CryptoReportingRuleResolver $ruleResolver)
     {
     }
 
-    // ─── Ponto de entrada principal ──────────────────────────────────────────
-
     /**
-     * Gera somente o leiaute legado quando ele for a regra aplicável à competência.
-     * Competências DeCripto recebem retorno explícito para impedir um arquivo
-     * estruturalmente inválido ser usado como declaração atual.
+     * @param bool $validationOnly Permite download técnico sem obrigatoriedade; não transmite dados.
      */
-    public function generateMonthlyFile(int $userId, int $month, int $year): array
+    public function generateMonthlyFile(int $userId, int $month, int $year, bool $validationOnly = false): array
     {
         $user = User::findOrFail($userId);
         $rule = $this->ruleResolver->resolve($year, $month);
+        $ruleContext = $this->ruleResolver->context($year, $month);
         $transactions = $this->getMonthlyTransactions($userId, $month, $year);
         $totalVolume = (float) $transactions->sum('total_brl');
         $isRequired = $this->ruleResolver->isMonthlyDeclarationRequired($totalVolume, $rule);
-        $ruleContext = $this->ruleResolver->context($year, $month);
-
-        if (!$isRequired) {
-            $limit = number_format((float) $rule->monthly_threshold_brl, 2, ',', '.');
-
-            return [
-                'required' => false,
-                'export_available' => $rule->legacy_export_available,
-                'message' => "Volume mensal não superior a R$ {$limit}. {$rule->obligation_name} não é obrigatória para esta competência.",
-                'total_volume' => $totalVolume,
-                'transactions_count' => $transactions->count(),
-                'rule' => $ruleContext,
-            ];
-        }
 
         if (!$rule->legacy_export_available) {
-            return [
-                'required' => true,
+            return $this->baseResponse($transactions, $totalVolume, $isRequired, $ruleContext, [
                 'export_available' => false,
-                'message' => "A competência {$month}/{$year} é regida por {$rule->obligation_name}. O arquivo legado da IN 1888 não pode ser gerado para este período.",
-                'total_volume' => $totalVolume,
-                'transactions_count' => $transactions->count(),
-                'rule' => $ruleContext,
-            ];
+                'validation_available' => false,
+                'message' => "A competência {$month}/{$year} é regida por {$rule->obligation_name}. O leiaute legado da IN 1888 não será gerado para este período.",
+            ]);
         }
 
-        $content = $this->buildFileContent($transactions, $user, $month, $year);
-        $filename = $this->generateFilename($user, $month, $year);
+        if (!$isRequired && !$validationOnly) {
+            $limit = number_format((float) $rule->monthly_threshold_brl, 2, ',', '.');
 
+            return $this->baseResponse($transactions, $totalVolume, false, $ruleContext, [
+                'export_available' => false,
+                'validation_available' => $transactions->isNotEmpty(),
+                'message' => "Volume mensal não superior a R$ {$limit}. A declaração não é obrigatória; é possível gerar apenas um arquivo de validação técnica.",
+            ]);
+        }
+
+        if ($transactions->isEmpty()) {
+            return $this->baseResponse($transactions, $totalVolume, $isRequired, $ruleContext, [
+                'export_available' => false,
+                'validation_available' => false,
+                'message' => 'Não há transações representáveis nesta competência para gerar o arquivo.',
+            ]);
+        }
+
+        $build = $this->buildLegacyContent($transactions);
+        if (empty($build['lines'])) {
+            return $this->baseResponse($transactions, $totalVolume, $isRequired, $ruleContext, [
+                'export_available' => false,
+                'validation_available' => false,
+                'unmapped_transactions' => $build['unmapped'],
+                'message' => 'Nenhuma transação possui tipo, origem e valor suficientes para o leiaute legado. Revise as pendências antes de gerar o arquivo.',
+            ]);
+        }
+
+        $content = implode("\r\n", $build['lines']) . "\r\n";
+        $validationErrors = $this->validateFile($content);
+        if ($validationErrors !== []) {
+            throw new \RuntimeException('O arquivo fiscal não passou na validação interna: ' . implode(' | ', $validationErrors));
+        }
+
+        $filename = $this->generateFilename($user, $month, $year, $validationOnly);
         Storage::disk('local')->put("in1888/{$filename}", $content);
 
-        Log::info("[IN1888] Arquivo legado gerado para usuário {$userId} — {$month}/{$year}: {$filename}");
+        Log::info('[IN1888] Arquivo legado somente leitura gerado.', [
+            'user_id' => $userId,
+            'competence' => sprintf('%02d/%04d', $month, $year),
+            'validation_only' => $validationOnly,
+            'records' => count($build['lines']),
+            'unmapped_transactions' => count($build['unmapped']),
+        ]);
 
-        return [
-            'required' => true,
-            'export_available' => true,
+        return $this->baseResponse($transactions, $totalVolume, $isRequired, $ruleContext, [
+            'export_available' => !$validationOnly,
+            'validation_available' => true,
+            'validation_only' => $validationOnly,
             'filename' => $filename,
             'content' => $content,
-            'total_volume' => $totalVolume,
-            'transactions_count' => $transactions->count(),
             'file_path' => storage_path("app/in1888/{$filename}"),
-            'download_url' => route('in1888.download', $filename),
-            'rule' => $ruleContext,
-        ];
+            // O frontend baixa o conteúdo retornado como Blob; não há transmissão automática.
+            'download_url' => null,
+            'unmapped_transactions' => $build['unmapped'],
+            'message' => $validationOnly
+                ? 'Arquivo de validação gerado. Não transmita uma competência sem obrigatoriedade.'
+                : 'Arquivo legado gerado. Valide no ColetaNac antes de qualquer transmissão.',
+        ]);
     }
 
-    // ─── Consulta de transações ───────────────────────────────────────────────
-
-    /**
-     * Retorna as transações do mês que devem constar na IN 1888.
-     * Exclui exchanges nacionais (country_code = 'BR').
-     */
-    public function getMonthlyTransactions(int $userId, int $month, int $year)
+    public function getMonthlyTransactions(int $userId, int $month, int $year): Collection
     {
-        $nationalApiKeyIds = UserApiKey::where('user_id', $userId)
-            ->whereHas('exchange', fn ($q) => $q->where('country_code', 'BR'))
+        $nationalApiKeyIds = UserApiKey::query()
+            ->where('user_id', $userId)
+            ->whereHas('exchange', fn ($query) => $query->where('country_code', 'BR'))
             ->pluck('id')
-            ->toArray();
+            ->all();
 
-        return Transaction::where('user_id', $userId)
+        return Transaction::query()
+            ->where('user_id', $userId)
             ->whereYear('date', $year)
             ->whereMonth('date', $month)
             ->whereIn('type', ['trade', 'convert', 'deposit', 'withdrawal', 'fiat_buy', 'fiat_sell'])
             ->where(function ($query) use ($nationalApiKeyIds) {
-                $query->where(function ($q) use ($nationalApiKeyIds) {
-                    $q->where('source_type', UserApiKey::class)
-                      ->whereNotIn('source_id', $nationalApiKeyIds);
-                })->orWhere(function ($q) {
-                    $q->where('source_type', '!=', UserApiKey::class)
-                      ->orWhereNull('source_type');
+                $query->where(function ($nested) use ($nationalApiKeyIds) {
+                    $nested->where('source_type', UserApiKey::class)->whereNotIn('source_id', $nationalApiKeyIds);
+                })->orWhere(function ($nested) {
+                    $nested->where('source_type', '!=', UserApiKey::class)->orWhereNull('source_type');
                 });
             })
             ->orderBy('date')
             ->get();
     }
 
-    // ─── Construção do arquivo ────────────────────────────────────────────────
-
-    private function buildFileContent($transactions, User $user, int $month, int $year): string
+    /** @return array{lines: array<int, string>, unmapped: array<int, array<string, mixed>>} */
+    private function buildLegacyContent(Collection $transactions): array
     {
-        $lines   = [];
-        $lines[] = $this->buildRecord0000($user, $month, $year);
-        $lines[] = $this->buildRecord0010($user);
+        $lines = [];
+        $unmapped = [];
 
         foreach ($transactions as $transaction) {
-            $record = $this->buildRecord0720($transaction);
-            if ($record !== null) {
-                $lines[] = $record;
-            }
-        }
-
-        $lines[] = $this->buildRecord9999(count($lines));
-
-        return implode("\r\n", $lines);
-    }
-
-    private function buildRecord0000(User $user, int $month, int $year): string
-    {
-        return sprintf(
-            "0000%s%02d%04d%s%s",
-            str_pad(preg_replace('/\D/', '', $user->cpf ?? ''), 11, '0', STR_PAD_LEFT),
-            $month,
-            $year,
-            str_pad('', 8, ' '),
-            'IN1888'
-        );
-    }
-
-    private function buildRecord0010(User $user): string
-    {
-        return sprintf(
-            "0010%s%s%s",
-            str_pad(preg_replace('/\D/', '', $user->cpf ?? ''), 11, '0', STR_PAD_LEFT),
-            str_pad(mb_strtoupper($user->name ?? ''), 60, ' ', STR_PAD_RIGHT),
-            str_pad('', 29, ' ')
-        );
-    }
-
-    /**
-     * Registro 0720 — Operação com criptoativo (136 caracteres).
-     * Campos corrigidos: from_asset, from_amount, total_brl (não crypto_asset/amount/value_brl).
-     */
-    private function buildRecord0720(Transaction $transaction): ?string
-    {
-        try {
-            $date = $transaction->date instanceof Carbon
-                ? $transaction->date
-                : Carbon::parse($transaction->date);
-
-            [$asset, $amount] = $this->resolveAssetAndAmount($transaction);
-            $valueBrl         = (float) ($transaction->total_brl ?? 0);
-            $price            = (float) ($transaction->price ?? 0);
-            $exchangeCode     = $this->resolveExchangeCode($transaction);
-
-            return sprintf(
-                "0720%s%s%s%s%s%s%s",
-                $date->format('dmY'),                                                    //  8
-                str_pad($this->getOperationCode($transaction->type), 2, '0', STR_PAD_LEFT), //  2
-                str_pad(mb_strtoupper($asset), 10, ' ', STR_PAD_RIGHT),                 // 10
-                str_pad($this->formatAmount($amount), 18, '0', STR_PAD_LEFT),           // 18
-                str_pad($this->formatValue($price), 18, '0', STR_PAD_LEFT),             // 18
-                str_pad($this->formatValue($valueBrl), 18, '0', STR_PAD_LEFT),          // 18
-                str_pad(mb_strtoupper($exchangeCode), 60, ' ', STR_PAD_RIGHT)           // 60
-            );                                                                           // = 134 + 4 (0720) = 136 ✓
-
-        } catch (\Exception $e) {
-            Log::error("[IN1888] Erro no registro 0720 para transação {$transaction->id}: " . $e->getMessage());
-            return null;
-        }
-    }
-
-    private function buildRecord9999(int $totalRecords): string
-    {
-        return sprintf("9999%s", str_pad($totalRecords + 1, 6, '0', STR_PAD_LEFT));
-    }
-
-    // ─── Helpers de resolução ─────────────────────────────────────────────────
-
-    private function resolveAssetAndAmount(Transaction $transaction): array
-    {
-        return match ($transaction->type) {
-            'withdrawal', 'fiat_sell' => [
-                $transaction->from_asset ?? '',
-                (float) ($transaction->from_amount ?? 0),
-            ],
-            'deposit', 'fiat_buy' => [
-                $transaction->to_asset ?? '',
-                (float) ($transaction->to_amount ?? 0),
-            ],
-            default => [
-                $transaction->from_asset ?? ($transaction->to_asset ?? ''),
-                (float) ($transaction->from_amount ?? $transaction->to_amount ?? 0),
-            ],
-        };
-    }
-
-    private function resolveExchangeCode(Transaction $transaction): string
-    {
-        if ($transaction->source_type === UserApiKey::class && $transaction->source_id) {
             try {
-                $apiKey = UserApiKey::with('exchange')->find($transaction->source_id);
-                if ($apiKey?->exchange) {
-                    return $this->getExchangeCode($apiKey->exchange->name);
+                $record = $this->buildLegacyRecord($transaction);
+                if ($record === null) {
+                    $unmapped[] = $this->unmapped($transaction, 'Tipo de operação não representável no leiaute legado.');
+                    continue;
                 }
-            } catch (\Exception $e) {
-                Log::debug("[IN1888] Não foi possível resolver exchange para transação {$transaction->id}");
+                $lines[] = $record;
+            } catch (\Throwable $exception) {
+                Log::warning('[IN1888] Transação não incluída no arquivo legado.', [
+                    'transaction_id' => $transaction->id,
+                    'reason' => $exception->getMessage(),
+                ]);
+                $unmapped[] = $this->unmapped($transaction, $exception->getMessage());
             }
         }
 
-        if (!empty($transaction->source)) {
-            return $this->getExchangeCode($transaction->source);
+        return compact('lines', 'unmapped');
+    }
+
+    private function buildLegacyRecord(Transaction $transaction): ?string
+    {
+        $exchange = $this->resolveExchangeMetadata($transaction);
+        $date = $this->date($transaction)->format('dmY');
+        $fee = $this->number((float) ($transaction->fee_brl ?? 0), 10, 2);
+        $value = $this->requiredNumber((float) ($transaction->total_brl ?? 0), 15, 2, 'Valor fiscal em BRL ausente');
+
+        return match ($transaction->type) {
+            'fiat_buy' => $this->fixed('0110', [
+                '0110', $date, $this->text('I', 4), $value, $fee,
+                $this->text($transaction->to_asset, 10), $this->requiredNumber((float) $transaction->to_amount, 26, 10, 'Quantidade recebida ausente'),
+                $exchange['name'], $exchange['url'], $exchange['country'],
+            ]),
+            'fiat_sell' => $this->fixed('0120', [
+                '0120', $date, $this->text('I', 4), $value, $fee,
+                $this->text($transaction->from_asset, 10), $this->requiredNumber((float) $transaction->from_amount, 26, 10, 'Quantidade enviada ausente'),
+                $exchange['name'], $exchange['url'], $exchange['country'],
+            ]),
+            'trade', 'convert' => $this->fixed('0210', [
+                '0210', $date, $this->text('II', 4), $fee,
+                $this->text($transaction->to_asset, 10), $this->requiredNumber((float) $transaction->to_amount, 26, 10, 'Quantidade recebida ausente'),
+                $this->text($transaction->from_asset, 10), $this->requiredNumber((float) $transaction->from_amount, 26, 10, 'Quantidade enviada ausente'),
+                $exchange['name'], $exchange['url'], $exchange['country'],
+            ]),
+            'deposit' => $this->fixed('0410', [
+                '0410', $date, $this->text('IV', 4), $fee,
+                $this->text($transaction->to_asset, 10), $this->requiredNumber((float) $transaction->to_amount, 26, 10, 'Quantidade recebida ausente'),
+                $exchange['name'], $exchange['url'], $exchange['country'],
+            ]),
+            'withdrawal' => $this->fixed('0510', [
+                '0510', $date, $this->text('V', 4), $fee,
+                $this->text($transaction->from_asset, 10), $this->requiredNumber((float) $transaction->from_amount, 26, 10, 'Quantidade enviada ausente'),
+                $exchange['name'], $exchange['url'], $exchange['country'],
+            ]),
+            default => null,
+        };
+    }
+
+    /** @return array{name: string, url: string, country: string} */
+    private function resolveExchangeMetadata(Transaction $transaction): array
+    {
+        $name = null;
+        $country = null;
+        if ($transaction->source_type === UserApiKey::class && $transaction->source_id) {
+            $apiKey = UserApiKey::query()->with('exchange')->find($transaction->source_id);
+            $name = $apiKey?->exchange?->name;
+            $country = $apiKey?->exchange?->country_code;
+        }
+        $name ??= is_string($transaction->source ?? null) ? $transaction->source : null;
+        $normalized = Str::lower((string) $name);
+
+        if ($normalized === 'binance') {
+            return ['name' => $this->text('Binance', 60), 'url' => $this->text('https://www.binance.com', 80), 'country' => $this->text($country ?: 'MT', 2)];
         }
 
-        return 'OUTROS';
+        throw new \RuntimeException('Origem de exchange estrangeira não identificada ou sem metadados de URL e país.');
     }
 
-    private function getOperationCode(string $type): string
+    private function fixed(string $record, array $fields): string
     {
-        return match ($type) {
-            'fiat_buy'   => '01',
-            'fiat_sell'  => '02',
-            'trade'      => '02',
-            'convert'    => '02',
-            'deposit'    => '03',
-            'withdrawal' => '04',
-            default      => '99',
-        };
+        $line = implode('', $fields);
+        $expected = self::LEGACY_RECORD_LENGTHS[$record];
+        if (strlen($line) !== $expected) {
+            throw new \RuntimeException("Registro {$record} com " . strlen($line) . " caracteres; esperado {$expected}.");
+        }
+        return $line;
     }
 
-    private function getExchangeCode(string $exchange): string
+    private function text(?string $value, int $length): string
     {
-        $normalized = strtolower(trim($exchange));
-
-        return match ($normalized) {
-            'binance'                        => 'BINANCE',
-            'coinbase'                       => 'COINBASE',
-            'kraken'                         => 'KRAKEN',
-            'mercado_bitcoin', 'mercadobitcoin' => 'MERCADO BITCOIN',
-            'bitget'                         => 'BITGET',
-            'bybit'                          => 'BYBIT',
-            'kucoin'                         => 'KUCOIN',
-            'okx'                            => 'OKX',
-            'gate', 'gateio'                 => 'GATE.IO',
-            'huobi', 'htx'                   => 'HTX',
-            'bitfinex'                       => 'BITFINEX',
-            'bitmex'                         => 'BITMEX',
-            'foxbit'                         => 'FOXBIT',
-            'novadax'                        => 'NOVADAX',
-            'ripio'                          => 'RIPIO',
-            default                          => 'OUTROS',
-        };
+        $value = Str::upper(Str::ascii(trim((string) $value)));
+        if ($value === '') {
+            throw new \RuntimeException('Campo textual obrigatório não informado.');
+        }
+        return str_pad(substr($value, 0, $length), $length, ' ');
     }
 
-    // ─── Formatação ───────────────────────────────────────────────────────────
-
-    private function formatAmount(float $amount): string
+    private function number(float $value, int $length, int $decimals): string
     {
-        return str_replace('.', '', number_format(abs($amount), 8, '.', ''));
+        return $this->formatNumber(max(0, $value), $length, $decimals);
     }
 
-    private function formatValue(float $value): string
+    private function requiredNumber(float $value, int $length, int $decimals, string $error): string
     {
-        return str_replace('.', '', number_format(abs($value), 2, '.', ''));
+        if ($value <= 0) {
+            throw new \RuntimeException($error . '.');
+        }
+        return $this->formatNumber($value, $length, $decimals);
     }
 
-    private function generateFilename(User $user, int $month, int $year): string
+    private function formatNumber(float $value, int $length, int $decimals): string
     {
-        $cpf = preg_replace('/\D/', '', $user->cpf ?? '00000000000');
-        return sprintf("IN1888_%s_%04d%02d.txt", $cpf, $year, $month);
+        $digits = str_replace('.', '', number_format($value, $decimals, '.', ''));
+        if (strlen($digits) > $length) {
+            throw new \RuntimeException("Valor numérico excede {$length} posições.");
+        }
+        return str_pad($digits, $length, '0', STR_PAD_LEFT);
     }
 
-    // ─── Utilitários públicos ─────────────────────────────────────────────────
+    private function date(Transaction $transaction): Carbon
+    {
+        return $transaction->date instanceof Carbon ? $transaction->date : Carbon::parse($transaction->date, 'America/Sao_Paulo');
+    }
+
+    private function unmapped(Transaction $transaction, string $reason): array
+    {
+        return ['id' => $transaction->id, 'type' => $transaction->type, 'reference' => $transaction->reference, 'reason' => $reason];
+    }
+
+    private function baseResponse(Collection $transactions, float $totalVolume, bool $required, array $rule, array $extra = []): array
+    {
+        return array_merge([
+            'required' => $required,
+            'total_volume' => $totalVolume,
+            'transactions_count' => $transactions->count(),
+            'rule' => $rule,
+        ], $extra);
+    }
 
     public function validateFile(string $content): array
     {
-        $lines  = explode("\r\n", $content);
+        $lines = array_values(array_filter(preg_split('/\r\n|\n|\r/', trim($content)) ?: []));
         $errors = [];
+        if ($lines === []) return ['Arquivo vazio'];
 
-        if (empty($lines)) return ['Arquivo vazio'];
-
-        if (!str_starts_with($lines[0], '0000'))
-            $errors[] = 'Registro de abertura (0000) não encontrado';
-
-        if (count($lines) < 2 || !str_starts_with($lines[1], '0010'))
-            $errors[] = 'Registro de identificação (0010) não encontrado';
-
-        if (!str_starts_with(end($lines), '9999'))
-            $errors[] = 'Registro de encerramento (9999) não encontrado';
-
-        $operationRecords = 0;
-        foreach ($lines as $line) {
-            if (str_starts_with($line, '0720')) {
-                $operationRecords++;
-                if (strlen($line) !== 136)
-                    $errors[] = "Registro 0720 com tamanho incorreto: " . strlen($line) . " chars (esperado: 136)";
+        foreach ($lines as $index => $line) {
+            $record = substr($line, 0, 4);
+            if (!isset(self::LEGACY_RECORD_LENGTHS[$record])) {
+                $errors[] = 'Registro desconhecido na linha ' . ($index + 1) . ': ' . $record;
+                continue;
+            }
+            if (strlen($line) !== self::LEGACY_RECORD_LENGTHS[$record]) {
+                $errors[] = "Registro {$record} na linha " . ($index + 1) . ' possui tamanho inválido.';
             }
         }
-
-        if ($operationRecords === 0)
-            $errors[] = 'Nenhum registro de operação (0720) encontrado';
-
         return $errors;
     }
 
-    public function getFileHistory(int $userId): array
+    private function generateFilename(User $user, int $month, int $year, bool $validationOnly): string
     {
-        $user    = User::find($userId);
-        $userCpf = preg_replace('/\D/', '', $user->cpf ?? '');
-        $files   = Storage::disk('local')->files('in1888');
-
-        $history = [];
-        foreach (array_filter($files, fn ($f) => str_contains($f, $userCpf)) as $file) {
-            $filename = basename($file);
-            if (preg_match('/IN1888_\d+_(\d{4})(\d{2})\.txt/', $filename, $m)) {
-                $history[] = [
-                    'filename'     => $filename,
-                    'month'        => (int) $m[2],
-                    'year'         => (int) $m[1],
-                    'period'       => sprintf('%02d/%04d', $m[2], $m[1]),
-                    'size'         => Storage::disk('local')->size($file),
-                    'created_at'   => Carbon::createFromTimestamp(Storage::disk('local')->lastModified($file)),
-                    'download_url' => route('in1888.download', $filename),
-                ];
-            }
-        }
-
-        usort($history, fn ($a, $b) => ($b['year'] * 100 + $b['month']) - ($a['year'] * 100 + $a['month']));
-        return $history;
-    }
-
-    public function getComplianceStatus(int $userId): array
-    {
-        $currentMonth = now()->month;
-        $currentYear  = now()->year;
-        $status       = [];
-
-        for ($i = 0; $i < 12; $i++) {
-            $month = $currentMonth - $i;
-            $year  = $currentYear;
-            if ($month <= 0) { $month += 12; $year--; }
-
-            $transactions = $this->getMonthlyTransactions($userId, $month, $year);
-            $volume       = $transactions->sum('total_brl');
-            $required     = $volume > 30000;
-            $generated    = $this->hasGeneratedFile($userId, $month, $year);
-
-            $status[] = [
-                'month'     => $month,
-                'year'      => $year,
-                'period'    => sprintf('%02d/%04d', $month, $year),
-                'volume'    => $volume,
-                'required'  => $required,
-                'generated' => $generated,
-                'status'    => $required ? ($generated ? 'compliant' : 'pending') : 'not_required',
-            ];
-        }
-
-        return $status;
-    }
-
-    private function hasGeneratedFile(int $userId, int $month, int $year): bool
-    {
-        $user    = User::find($userId);
-        $userCpf = preg_replace('/\D/', '', $user->cpf ?? '');
-        return Storage::disk('local')->exists(
-            sprintf("in1888/IN1888_%s_%04d%02d.txt", $userCpf, $year, $month)
-        );
+        $cpf = preg_replace('/\D/', '', $user->cpf ?? '00000000000');
+        $prefix = $validationOnly ? 'IN1888_VALIDACAO' : 'IN1888';
+        return sprintf('%s_%s_%04d%02d.txt', $prefix, $cpf, $year, $month);
     }
 }
