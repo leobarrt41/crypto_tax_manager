@@ -112,7 +112,7 @@
                     <p class="text-sm font-medium">Sincronização {{ exchangeForm.year }}</p>
                     <p class="mt-1 text-xs">{{ syncStatusMessage }}</p>
                     <p v-if="['pricing', 'completed'].includes(syncSession.status)" class="mt-1 text-xs">
-                      {{ syncSession.transactions_imported }} transações encontradas. A cobertura será atualizada após a cotação.
+                      {{ syncSession.transactions_imported }} registros consultados na API nesta execução. Referências já existentes são reconciliadas, sem criar duplicidades.
                     </p>
                     <p v-if="syncSession.status === 'completed' && syncSession.pricing" class="mt-1 text-xs">
                       Cotação fiscal concluída: {{ syncSession.pricing.updated || 0 }} atualizada(s)<span v-if="syncSession.pricing.unavailable">; {{ syncSession.pricing.unavailable }} sem cotação histórica disponível para revisão</span>.
