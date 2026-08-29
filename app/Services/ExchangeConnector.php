@@ -8,6 +8,10 @@ use Illuminate\Support\Facades\Log;
 
 class ExchangeConnector
 {
+    public function __construct(private readonly TradingExecutionGuard $executionGuard)
+    {
+    }
+
     protected $exchangeConfigs = [
         'binance' => [
             'base_url' => 'https://api.binance.com',
@@ -79,6 +83,8 @@ class ExchangeConnector
     public function placeOrder(UserApiKey $apiKey, $orderData)
     {
         try {
+            $this->executionGuard->assertRealOrderSubmissionAllowed($apiKey);
+
             switch ($apiKey->exchange) {
                 case 'binance':
                     return $this->placeBinanceOrder($apiKey, $orderData);
@@ -92,7 +98,11 @@ class ExchangeConnector
                     throw new \Exception("Exchange não suportada: {$apiKey->exchange}");
             }
         } catch (\Exception $e) {
-            Log::error("Erro ao colocar ordem: " . $e->getMessage());
+            Log::warning('Envio de ordem bloqueado ou falhou.', [
+                'user_api_key_id' => $apiKey->id,
+                'message' => $e->getMessage(),
+            ]);
+
             return ['success' => false, 'error' => $e->getMessage()];
         }
     }

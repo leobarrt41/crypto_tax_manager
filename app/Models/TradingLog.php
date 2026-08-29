@@ -6,12 +6,34 @@ use Illuminate\Database\Eloquent\Model;
 
 class TradingLog extends Model
 {
+    public $timestamps = false;
+
     protected $fillable = [
+        'user_id',
         'bot_order_id',
-        'log_type',
+        'trading_strategy_id',
+        'event_type',
+        'severity',
         'message',
-        'timestamp',
+        'payload',
+        'source',
+        'logged_at',
+        'occurred_at',
     ];
 
-    public $timestamps = false;
+    protected $casts = [
+        'payload' => 'array',
+        'logged_at' => 'datetime',
+        'occurred_at' => 'datetime',
+    ];
+
+    public function tradingStrategy()
+    {
+        return $this->belongsTo(TradingStrategy::class);
+    }
+
+    public function botOrder()
+    {
+        return $this->belongsTo(BotOrder::class);
+    }
 }

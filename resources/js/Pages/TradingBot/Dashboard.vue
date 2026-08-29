@@ -3,42 +3,24 @@
     <div class="py-12">
       <div class="max-w-7xl mx-auto sm:px-6 lg:px-8">
         
-        <!-- Header com controles do bot -->
+        <!-- Estado de execução durante a Fase 0 -->
         <div class="bg-white overflow-hidden shadow-xl sm:rounded-lg mb-6">
           <div class="p-6">
-            <div class="flex justify-between items-center">
+            <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <h2 class="text-2xl font-bold text-gray-900">Trading Bot Dashboard</h2>
-                <p class="text-gray-600">Gerencie suas estratégias de trading automatizado</p>
+                <h2 class="text-2xl font-bold text-gray-900">Trading Bot</h2>
+                <p class="text-gray-600">Estratégias, backtesting e execução serão liberados progressivamente.</p>
               </div>
-              
-              <div class="flex space-x-4">
-                <!-- Status do Bot -->
-                <div class="flex items-center space-x-2">
-                  <div :class="[
-                    'w-3 h-3 rounded-full',
-                    stats.bot_status === 'running' ? 'bg-green-500' : 'bg-red-500'
-                  ]"></div>
-                  <span class="text-sm font-medium">
-                    {{ stats.bot_status === 'running' ? 'Bot Ativo' : 'Bot Parado' }}
-                  </span>
-                </div>
-                
-                <!-- Controles do Bot -->
-                <button
-                  @click="toggleBot"
-                  :disabled="loading"
-                  :class="[
-                    'px-4 py-2 rounded-md text-sm font-medium',
-                    stats.bot_status === 'running' 
-                      ? 'bg-red-600 hover:bg-red-700 text-white'
-                      : 'bg-green-600 hover:bg-green-700 text-white',
-                    loading ? 'opacity-50 cursor-not-allowed' : ''
-                  ]"
-                >
-                  {{ loading ? 'Processando...' : (stats.bot_status === 'running' ? 'Parar Bot' : 'Iniciar Bot') }}
-                </button>
+
+              <div class="inline-flex items-center gap-2 rounded-full bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800">
+                <span class="h-2.5 w-2.5 rounded-full bg-amber-500"></span>
+                Preparação segura — ordens reais bloqueadas
               </div>
+            </div>
+
+            <div class="mt-4 rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+              Nenhuma estratégia é monitorada automaticamente e nenhuma ordem é enviada à exchange nesta fase.
+              O próximo corte disponibilizará estratégias e sinais determinísticos; o modo paper será validado antes de qualquer operação real.
             </div>
           </div>
         </div>
@@ -101,13 +83,9 @@
                 </div>
                 <div class="ml-5 w-0 flex-1">
                   <dl>
-                    <dt class="text-sm font-medium text-gray-500 truncate">Lucro Hoje</dt>
-                    <dd :class="[
-                      'text-lg font-medium',
-                      stats.profit_today >= 0 ? 'text-green-600' : 'text-red-600'
-                    ]">
-                      {{ stats.profit_today >= 0 ? '+' : '' }}${{ stats.profit_today.toFixed(2) }}
-                    </dd>
+                    <dt class="text-sm font-medium text-gray-500 truncate">P&L Hoje</dt>
+                    <dd class="text-lg font-medium text-gray-900">—</dd>
+                    <p class="text-xs text-gray-500">Paper trading ainda não iniciado</p>
                   </dl>
                 </div>
               </div>
@@ -292,7 +270,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref } from 'vue'
 import { Link, router } from '@inertiajs/vue3'
 import AppLayout from '@/Layouts/AppLayout.vue'
 
@@ -303,42 +281,7 @@ const props = defineProps({
   recentLogs: Array
 })
 
-const loading = ref(false)
 const stats = ref(props.stats)
-let statsInterval = null
-
-// Atualizar estatísticas em tempo real
-const updateStats = async () => {
-  try {
-    const response = await fetch('/api/trading-bot/stats')
-    const data = await response.json()
-    stats.value = { ...stats.value, ...data }
-  } catch (error) {
-    console.error('Erro ao atualizar estatísticas:', error)
-  }
-}
-
-// Controlar bot (iniciar/parar)
-const toggleBot = async () => {
-  loading.value = true
-  
-  try {
-    const action = stats.value.bot_status === 'running' ? 'stop' : 'start'
-    
-    await router.post('/trading-bot/toggle', { action }, {
-      preserveState: true,
-      preserveScroll: true,
-      onSuccess: () => {
-        // Atualizar status imediatamente
-        stats.value.bot_status = action === 'start' ? 'running' : 'stopped'
-      }
-    })
-  } catch (error) {
-    console.error('Erro ao controlar bot:', error)
-  } finally {
-    loading.value = false
-  }
-}
 
 // Ativar/Desativar estratégia
 const toggleStrategy = async (strategy) => {
@@ -355,15 +298,5 @@ const toggleStrategy = async (strategy) => {
   }
 }
 
-onMounted(() => {
-  // Atualizar estatísticas a cada 30 segundos
-  statsInterval = setInterval(updateStats, 30000)
-})
-
-onUnmounted(() => {
-  if (statsInterval) {
-    clearInterval(statsInterval)
-  }
-})
 </script>
 

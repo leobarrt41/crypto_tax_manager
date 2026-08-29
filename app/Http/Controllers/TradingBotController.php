@@ -4,21 +4,23 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Artisan;
 use App\Models\TradingStrategy;
 use App\Models\BotOrder;
 use App\Models\TradingLog;
 use App\Models\UserApiKey;
 use App\Services\TradingBotEngine;
 use App\Services\ExchangeConnector;
+use App\Services\TradingAuditLogger;
 use Inertia\Inertia;
 
 class TradingBotController extends Controller
 {
     protected $exchangeConnector;
 
-    public function __construct(ExchangeConnector $exchangeConnector)
-    {
+    public function __construct(
+        ExchangeConnector $exchangeConnector,
+        private readonly TradingAuditLogger $auditLogger,
+    ) {
         $this->exchangeConnector = $exchangeConnector;
     }
 
@@ -226,22 +228,22 @@ class TradingBotController extends Controller
      */
     public function toggleBot(Request $request)
     {
-        $action = $request->input('action'); // 'start' ou 'stop'
+        $action = $request->input('action', 'start');
+        $user = Auth::user();
 
-        try {
-            if ($action === 'start') {
-                Artisan::call('trading-bot:run');
-                $message = 'Trading Bot iniciado com sucesso!';
-            } else {
-                Artisan::call('trading-bot:run', ['--stop' => true]);
-                $message = 'Trading Bot parado com sucesso!';
-            }
+        $this->auditLogger->record(
+            $user->id,
+            'execution_blocked',
+            "Solicitação para {$action} o Trading Bot bloqueada pela política de segurança da Fase 0.",
+            'warning',
+            payload: ['requested_action' => $action],
+            source: 'trading_bot_controller',
+        );
 
-            return back()->with('success', $message);
-
-        } catch (\Exception $e) {
-            return back()->with('error', 'Erro ao controlar o bot: ' . $e->getMessage());
-        }
+        return back()->with(
+            'warning',
+            'O Trading Bot está em preparação segura. Monitoramento automático e ordens reais permanecem bloqueados até a fase de paper trading.'
+        );
     }
 
     /**
@@ -361,49 +363,29 @@ class TradingBotController extends Controller
 
     protected function calculateDailyProfit($userId)
     {
-        // Implementar cálculo de lucro diário
-        // Por simplicidade, retornar valor simulado
-        return rand(-100, 500) / 10; // -10 a 50 USDT
+        // Paper trading ainda não foi iniciado; não apresentar resultado fictício.
+        return 0;
     }
 
     protected function getBotStatus()
     {
-        $pidFile = storage_path('app/trading_bot.pid');
-        if (!file_exists($pidFile)) {
-            return 'stopped';
-        }
-
-        $pid = trim(file_get_contents($pidFile));
-        $result = exec("ps -p {$pid}");
-        
-        return !empty($result) ? 'running' : 'stopped';
+        return 'disabled';
     }
 
     protected function calculateStrategyProfitLoss(TradingStrategy $strategy)
     {
-        // Implementar cálculo de P&L da estratégia
-        return rand(-50, 200) / 10; // -5 a 20 USDT
+        // Métricas serão calculadas somente a partir de trades persistidos na fase de paper trading.
+        return 0;
     }
 
     protected function calculateSuccessRate(TradingStrategy $strategy)
     {
-        // Implementar cálculo de taxa de sucesso
-        return rand(60, 95); // 60% a 95%
+        return 0;
     }
 
     protected function getStrategyPerformance(TradingStrategy $strategy, $days)
     {
-        // Implementar dados de performance
-        $performance = [];
-        for ($i = $days; $i >= 0; $i--) {
-            $date = now()->subDays($i)->format('Y-m-d');
-            $performance[] = [
-                'date' => $date,
-                'profit' => rand(-20, 50) / 10,
-                'orders' => rand(0, 10)
-            ];
-        }
-        return $performance;
+        return [];
     }
 }
 

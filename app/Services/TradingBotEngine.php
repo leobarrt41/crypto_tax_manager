@@ -27,20 +27,11 @@ class TradingBotEngine
      */
     public function start()
     {
-        if ($this->isRunning) {
-            return false;
-        }
+        Log::warning('Tentativa de iniciar o motor de trading bloqueada.', [
+            'reason' => 'A Fase 0 não permite monitoramento automático nem envio de ordens.',
+        ]);
 
-        $this->isRunning = true;
-        $this->log('Trading Bot Engine iniciado');
-
-        // Carregar estratégias ativas
-        $this->loadActiveStrategies();
-
-        // Iniciar loop principal
-        $this->mainLoop();
-
-        return true;
+        return false;
     }
 
     /**
@@ -49,7 +40,7 @@ class TradingBotEngine
     public function stop()
     {
         $this->isRunning = false;
-        $this->log('Trading Bot Engine parado');
+        Log::info('Motor de trading mantido parado pela política da Fase 0.');
     }
 
     /**
