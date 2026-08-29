@@ -47,6 +47,10 @@ class TradingAuditLogger
                 continue;
             }
 
+            if (is_object($value)) {
+                $value = (array) $value;
+            }
+
             if (is_array($value)) {
                 $payload[$key] = $this->maskSensitiveValues($value);
             }

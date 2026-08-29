@@ -45,39 +45,6 @@ Route::middleware(['auth:sanctum'])->group(function () {
 
 /*
 |--------------------------------------------------------------------------
-| Trading Bot API Routes
-|--------------------------------------------------------------------------
-*/
-Route::middleware(['auth:sanctum'])->prefix('trading-bot')->group(function () {
-    
-    // Bot Control
-    Route::post('/start', [TradingBotController::class, 'startBot']);
-    Route::post('/stop', [TradingBotController::class, 'stopBot']);
-    Route::get('/status', [TradingBotController::class, 'getBotStatus']);
-    
-    // Strategies
-    Route::get('/strategies', [TradingBotController::class, 'getStrategies']);
-    Route::post('/strategies', [TradingBotController::class, 'createStrategy']);
-    Route::put('/strategies/{id}', [TradingBotController::class, 'updateStrategy']);
-    Route::delete('/strategies/{id}', [TradingBotController::class, 'deleteStrategy']);
-    Route::post('/strategies/{id}/toggle', [TradingBotController::class, 'toggleStrategy']);
-    
-    // Orders
-    Route::get('/orders', [TradingBotController::class, 'getOrders']);
-    Route::get('/orders/recent', [TradingBotController::class, 'getRecentOrders']);
-    Route::post('/orders/cancel/{id}', [TradingBotController::class, 'cancelOrder']);
-    
-    // Logs
-    Route::get('/logs', [TradingBotController::class, 'getLogs']);
-    Route::get('/logs/live', [TradingBotController::class, 'getLiveLogs']);
-    
-    // Performance
-    Route::get('/performance', [TradingBotController::class, 'getPerformance']);
-    Route::get('/performance/chart', [TradingBotController::class, 'getPerformanceChart']);
-});
-
-/*
-|--------------------------------------------------------------------------
 | Transactions API Routes
 |--------------------------------------------------------------------------
 */
@@ -146,24 +113,6 @@ Route::middleware(['auth:sanctum'])->prefix('exchange-keys')->group(function () 
 
 /*
 |--------------------------------------------------------------------------
-| Backtesting API Routes
-|--------------------------------------------------------------------------
-*/
-Route::middleware(['auth:sanctum'])->prefix('backtesting')->group(function () {
-    
-    // Backtesting Operations
-    Route::post('/run', [TradingBotController::class, 'runBacktest']);
-    Route::get('/results/{id}', [TradingBotController::class, 'getBacktestResults']);
-    Route::get('/history', [TradingBotController::class, 'getBacktestHistory']);
-    Route::delete('/results/{id}', [TradingBotController::class, 'deleteBacktestResult']);
-    
-    // Strategy Templates
-    Route::get('/strategy-templates', [TradingBotController::class, 'getStrategyTemplates']);
-    Route::get('/market-data/{symbol}', [TradingBotController::class, 'getMarketDataForBacktest']);
-});
-
-/*
-|--------------------------------------------------------------------------
 | Tax Reports API Routes
 |--------------------------------------------------------------------------
 */
@@ -224,10 +173,6 @@ Route::prefix('market')->group(function () {
 */
 Route::prefix('webhooks')->group(function () {
     
-    // Exchange webhooks
-    Route::post('/binance/order-update', [TradingBotController::class, 'handleBinanceWebhook']);
-    Route::post('/coinbase/order-update', [TradingBotController::class, 'handleCoinbaseWebhook']);
-    
     // Price alerts
     Route::post('/price-alert', [CryptoAssetController::class, 'handlePriceAlert']);
 });
@@ -250,4 +195,3 @@ Route::prefix('system')->group(function () {
     
     Route::get('/status', [DashboardController::class, 'getSystemStatus']);
 });
-

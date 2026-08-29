@@ -9,6 +9,16 @@ use LogicException;
 
 class TradingExecutionGuard
 {
+    public function operationKeyForStrategy(int $userId, int $strategyId): string
+    {
+        return "user:{$userId}:strategy:{$strategyId}";
+    }
+
+    public function runForStrategy(int $userId, int $strategyId, callable $callback): mixed
+    {
+        return $this->runExclusively($this->operationKeyForStrategy($userId, $strategyId), $callback);
+    }
+
     public function assertRealOrderSubmissionAllowed(UserApiKey $apiKey): void
     {
         if (!config('trading.real_orders_enabled')) {
