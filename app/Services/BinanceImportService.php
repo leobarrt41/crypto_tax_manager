@@ -70,7 +70,7 @@ public function runSmartImport(?int $year = null): array
 
         VerifyZeroValueTransactionsJob::dispatch(
             $this->user->id,
-            $this->apiKey->exchange_id,
+            $this->apiKey->id,
             true,
         )->onQueue('default');
 
