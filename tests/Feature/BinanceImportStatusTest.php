@@ -114,6 +114,12 @@ class BinanceImportStatusTest extends TestCase
                 'api_key_id' => $apiKey->id,
                 'year' => 2026,
                 'result' => ['spot_trades_imported' => 12],
+                'pricing' => [
+                    'status' => 'completed',
+                    'checked' => 12,
+                    'updated' => 10,
+                    'unavailable' => 2,
+                ],
             ],
         ]);
 
@@ -123,6 +129,15 @@ class BinanceImportStatusTest extends TestCase
             ->assertJsonPath('session.id', $session->id)
             ->assertJsonPath('session.status', 'completed')
             ->assertJsonPath('session.transactions_imported', 12)
-            ->assertJsonPath('session.result.spot_trades_imported', 12);
+            ->assertJsonPath('session.result.spot_trades_imported', 12)
+            ->assertJsonPath('session.pricing.status', 'completed')
+            ->assertJsonPath('session.pricing.unavailable', 2);
+    }
+
+    public function test_pricing_status_is_considered_an_import_in_progress(): void
+    {
+        $session = new ImportSession(['status' => 'pricing']);
+
+        $this->assertTrue($session->isInProgress());
     }
 }

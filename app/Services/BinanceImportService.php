@@ -8,7 +8,6 @@ use App\Models\Transaction;
 use App\Models\CryptoAsset;
 use App\Models\MonthlyAssetSnapshot;
 use App\Models\TradingPair;
-use App\Jobs\VerifyZeroValueTransactionsJob;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
@@ -68,20 +67,10 @@ public function runSmartImport(?int $year = null): array
         $this->prepareImport();
         $importResult = $this->runAnnualIncrementalImport($year);
 
-        VerifyZeroValueTransactionsJob::dispatch(
-            $this->user->id,
-            $this->apiKey->id,
-            true,
-        )->onQueue('default');
-
         return [
             'success' => true,
             'year' => $year,
             ...$importResult,
-            'verification' => [
-                'status' => 'scheduled',
-                'message' => 'A verificação de preços pendentes foi agendada.',
-            ],
         ];
     } catch (\Throwable $exception) {
         Log::error('[Binance] Falha na sincronização anual incremental.', [
@@ -1218,29 +1207,45 @@ private function generateSnapshotsFromCryptoAssets(): void
 
         // Gravar primeiro. O job VerifyZeroValueTransactionsJob enriquece
         // total_usdt e total_brl depois, sem travar a sincronização Spot quando
-        // um ativo não tiver par histórico vigente.
-        $totalUsdt = 0.0;
-        $totalBrl = 0.0;
+        // um ativo não tiver par histórico vigente. Uma nova sincronização nunca
+        // pode apagar uma cotação fiscal já calculada para a mesma referência.
+        $transaction = Transaction::firstOrNew([
+            'user_id' => $this->user->id,
+            'reference' => $trade['id'],
+        ]);
+        $shouldQueuePricing = !$transaction->exists
+            || (float) ($transaction->total_usdt ?? 0) <= 0
+            || (float) ($transaction->total_brl ?? 0) <= 0;
 
-        Transaction::updateOrCreate(
-            ['user_id' => $this->user->id, 'reference' => $trade['id']],
-            [
-                'source_type' => 'App\\Models\\UserApiKey',
-                'source_id' => $this->apiKey->id,
-                'type' => 'trade',
-                'from_asset' => $fromAsset,
-                'from_amount' => $fromAmount,
-                'from_crypto_asset_id' => $fromAssetId,
-                'to_asset' => $toAsset,
-                'to_amount' => $toAmount,
-                'to_crypto_asset_id' => $toAssetId,
-                'price' => (float)$trade['price'],
-                'total_usdt' => $totalUsdt,
-                'total_brl' => $totalBrl,
-                'date' => $date,
-                'source' => 'binance_spot_api'
-            ]
-        );
+        $transaction->fill([
+            'source_type' => 'App\\Models\\UserApiKey',
+            'source_id' => $this->apiKey->id,
+            'type' => 'trade',
+            'from_asset' => $fromAsset,
+            'from_amount' => $fromAmount,
+            'from_crypto_asset_id' => $fromAssetId,
+            'to_asset' => $toAsset,
+            'to_amount' => $toAmount,
+            'to_crypto_asset_id' => $toAssetId,
+            'price' => (float) $trade['price'],
+            'date' => $date,
+            'source' => 'binance_spot_api',
+        ]);
+
+        if ($shouldQueuePricing) {
+            $transaction->fill([
+                'total_usdt' => 0.0,
+                'total_brl' => 0.0,
+                'pricing_status' => 'pending',
+                'pricing_attempts' => 0,
+                'pricing_last_attempted_at' => null,
+                'pricing_failure_reason' => null,
+            ]);
+        } elseif ($transaction->pricing_status !== 'completed') {
+            $transaction->pricing_status = 'completed';
+        }
+
+        $transaction->save();
     }
 
     private function saveConversion(array $conv): void
@@ -1254,29 +1259,45 @@ private function generateSnapshotsFromCryptoAssets(): void
 
         // A resolução histórica de preço é feita pelo job de verificação após a
         // sincronização. Consultá-la para cada conversão bloqueava a fila em
-        // ativos sem par vigente e impedia o registro da cobertura mensal.
-        $totalUsdt = 0.0;
-        $totalBrl = 0.0;
+        // ativos sem par vigente e impedia o registro da cobertura mensal. Uma
+        // reimportação da mesma referência preserva os valores fiscais positivos.
+        $transaction = Transaction::firstOrNew([
+            'user_id' => $this->user->id,
+            'reference' => $conv['quoteId'],
+        ]);
+        $shouldQueuePricing = !$transaction->exists
+            || (float) ($transaction->total_usdt ?? 0) <= 0
+            || (float) ($transaction->total_brl ?? 0) <= 0;
 
-        Transaction::updateOrCreate(
-            ['user_id' => $this->user->id, 'reference' => $conv['quoteId']],
-            [
-                'source_type' => 'App\\Models\\UserApiKey',
-                'source_id' => $this->apiKey->id,
-                'type' => 'convert',
-                'from_asset' => $fromAssetSymbol,
-                'from_amount' => (float)$conv['fromAmount'],
-                'from_crypto_asset_id' => $fromAssetId,
-                'to_asset' => $toAssetSymbol,
-                'to_amount' => (float)$conv['toAmount'],
-                'to_crypto_asset_id' => $toAssetId,
-                'price' => (float)$conv['toAmount'] > 0 ? (float)$conv['fromAmount'] / (float)$conv['toAmount'] : 0,
-                'total_usdt' => $totalUsdt,
-                'total_brl' => $totalBrl,
-                'date' => $date,
-                'source' => 'binance_convert_api'
-            ]
-        );
+        $transaction->fill([
+            'source_type' => 'App\\Models\\UserApiKey',
+            'source_id' => $this->apiKey->id,
+            'type' => 'convert',
+            'from_asset' => $fromAssetSymbol,
+            'from_amount' => (float) $conv['fromAmount'],
+            'from_crypto_asset_id' => $fromAssetId,
+            'to_asset' => $toAssetSymbol,
+            'to_amount' => (float) $conv['toAmount'],
+            'to_crypto_asset_id' => $toAssetId,
+            'price' => (float) $conv['toAmount'] > 0 ? (float) $conv['fromAmount'] / (float) $conv['toAmount'] : 0,
+            'date' => $date,
+            'source' => 'binance_convert_api',
+        ]);
+
+        if ($shouldQueuePricing) {
+            $transaction->fill([
+                'total_usdt' => 0.0,
+                'total_brl' => 0.0,
+                'pricing_status' => 'pending',
+                'pricing_attempts' => 0,
+                'pricing_last_attempted_at' => null,
+                'pricing_failure_reason' => null,
+            ]);
+        } elseif ($transaction->pricing_status !== 'completed') {
+            $transaction->pricing_status = 'completed';
+        }
+
+        $transaction->save();
     }
 
     private function getHistoricalPrice(string $asset, Carbon $date): array

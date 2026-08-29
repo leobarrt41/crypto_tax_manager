@@ -30,17 +30,17 @@ class TransactionVerificationService
      * Verifica e atualiza todas as transações com valores zero de um usuário
      * 
      * @param User $user
-     * @param int|null $exchangeId ID da exchange (opcional)
+     * @param int|null $sourceId ID da chave de API/origem (opcional)
      * @return array Estatísticas da verificação
      */
-    public function verifyAndUpdateZeroValueTransactions(User $user, ?int $exchangeId = null): array
+    public function verifyAndUpdateZeroValueTransactions(User $user, ?int $sourceId = null): array
     {
         Log::info("======================================================================");
         Log::info("🔍 [Verificação] Iniciando verificação de transações com valores zero");
         Log::info("======================================================================");
         Log::info("👤 Usuário: {$user->id}");
-        if ($exchangeId) {
-            Log::info("🏦 Exchange ID: {$exchangeId}");
+        if ($sourceId) {
+            Log::info("🏦 ID da origem/API: {$sourceId}");
         }
         
         $stats = [
@@ -51,17 +51,21 @@ class TransactionVerificationService
             'failed_transactions' => []
         ];
         
-        // Buscar transações com valores zero
+        // Buscar apenas transações que ainda aguardam uma tentativa de cotação.
         $query = Transaction::where('user_id', $user->id)
             ->where(function($q) {
                 $q->where('total_usdt', 0)
                   ->orWhere('total_brl', 0)
                   ->orWhereNull('total_usdt')
                   ->orWhereNull('total_brl');
+            })
+            ->where(function ($query) {
+                $query->whereNull('pricing_status')
+                    ->orWhereIn('pricing_status', ['pending', 'processing']);
             });
             
-        if ($exchangeId) {
-            $query->where('source_id', $exchangeId);
+        if ($sourceId) {
+            $query->where('source_id', $sourceId);
         }
         
         $zeroValueTransactions = $query->orderBy('date', 'asc')->get();
@@ -135,6 +139,13 @@ class TransactionVerificationService
     {
         $oldUsdt = $transaction->total_usdt ?? 0;
         $oldBrl = $transaction->total_brl ?? 0;
+
+        $transaction->forceFill([
+            'pricing_status' => 'processing',
+            'pricing_attempts' => ((int) ($transaction->pricing_attempts ?? 0)) + 1,
+            'pricing_last_attempted_at' => now(),
+            'pricing_failure_reason' => null,
+        ])->save();
         
         try {
             $date = Carbon::parse($transaction->date);
@@ -151,43 +162,46 @@ class TransactionVerificationService
                 ];
             }
             
-            // Verificar se conseguimos calcular valores válidos
-            if ($values['total_usdt'] > 0 || $values['total_brl'] > 0) {
-                // Atualizar apenas se os novos valores forem diferentes de zero
-                if ($values['total_usdt'] > 0 && $values['total_brl'] > 0) {
-                    $transaction->update([
-                        'total_usdt' => $values['total_usdt'],
-                        'total_brl' => $values['total_brl']
-                    ]);
-                    
-                    return [
-                        'success' => true,
-                        'old_usdt' => $oldUsdt,
-                        'new_usdt' => $values['total_usdt'],
-                        'old_brl' => $oldBrl,
-                        'new_brl' => $values['total_brl']
-                    ];
-                } else {
-                    return [
-                        'success' => false,
-                        'reason' => 'Valores calculados ainda são zero ou incompletos'
-                    ];
-                }
-            } else {
+            if ($values['total_usdt'] > 0 && $values['total_brl'] > 0) {
+                $transaction->update([
+                    'total_usdt' => $values['total_usdt'],
+                    'total_brl' => $values['total_brl'],
+                    'pricing_status' => 'completed',
+                    'pricing_failure_reason' => null,
+                ]);
+
                 return [
-                    'success' => false,
-                    'reason' => 'Não foi possível calcular valores válidos'
+                    'success' => true,
+                    'old_usdt' => $oldUsdt,
+                    'new_usdt' => $values['total_usdt'],
+                    'old_brl' => $oldBrl,
+                    'new_brl' => $values['total_brl']
                 ];
             }
+
+            return $this->markPricingUnavailable(
+                $transaction,
+                'Não foi possível encontrar uma cotação histórica Binance e PTAX válida para esta operação.'
+            );
             
         } catch (\Exception $e) {
-            return [
-                'success' => false,
-                'reason' => 'Exceção: ' . $e->getMessage()
-            ];
+            return $this->markPricingUnavailable($transaction, 'Exceção na consulta de cotação: ' . $e->getMessage());
         }
     }
     
+    private function markPricingUnavailable(Transaction $transaction, string $reason): array
+    {
+        $transaction->update([
+            'pricing_status' => 'unavailable',
+            'pricing_failure_reason' => $reason,
+        ]);
+
+        return [
+            'success' => false,
+            'reason' => $reason,
+        ];
+    }
+
     /**
      * Calcula valores para transações do tipo 'trade'
      */
@@ -234,11 +248,17 @@ class TransactionVerificationService
      */
     private function calculateConversionValues(Transaction $transaction, Carbon $date): array
     {
-        $toAsset = $transaction->to_asset;
-        $toAmount = (float)$transaction->to_amount;
-        
-        $totalUsdt = $this->calculateTotalUsdt($toAsset, $toAmount, $date);
-        $totalBrl = $this->calculateTotalBrl($totalUsdt, $date);
+        $toAsset = strtoupper((string) $transaction->to_asset);
+        $toAmount = (float) $transaction->to_amount;
+
+        if ($toAsset === 'BRL') {
+            $totalBrl = $toAmount;
+            $usdBrlRate = $this->getUsdBrlRate($date);
+            $totalUsdt = $usdBrlRate > 0 ? $totalBrl / $usdBrlRate : 0;
+        } else {
+            $totalUsdt = $this->calculateTotalUsdt($toAsset, $toAmount, $date);
+            $totalBrl = $this->calculateTotalBrl($totalUsdt, $date);
+        }
         
         return [
             'total_usdt' => $totalUsdt,
@@ -311,9 +331,11 @@ class TransactionVerificationService
         
         // Buscar via serviço de preços (que já tem lógica de USD/BRL)
         $priceRecord = $this->priceService->getOrCreatePrice('USDT', $date);
-        $rate = $priceRecord->price_brl ?? 5.0; // Fallback para taxa aproximada
+        $rate = (float) ($priceRecord->price_brl ?? 0);
         
-        $this->usdBrlCache[$dateKey] = $rate;
+        if ($rate > 0) {
+            $this->usdBrlCache[$dateKey] = $rate;
+        }
         
         return $rate;
     }

@@ -73,7 +73,7 @@ class ImportSession extends Model
 
     public function scopeInProgress($query)
     {
-        return $query->whereIn('status', ['pending', 'processing']);
+        return $query->whereIn('status', ['pending', 'processing', 'pricing']);
     }
 
     // Métodos auxiliares
@@ -173,6 +173,6 @@ class ImportSession extends Model
 
     public function isInProgress(): bool
     {
-        return in_array($this->status, ['pending', 'processing']);
+        return in_array($this->status, ['pending', 'processing', 'pricing']);
     }
 }

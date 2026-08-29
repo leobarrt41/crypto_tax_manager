@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Models\ImportSession;
+use App\Jobs\VerifyZeroValueTransactionsJob;
 use App\Models\User;
 use App\Services\BinanceImportService;
 use Illuminate\Bus\Queueable;
@@ -46,11 +47,9 @@ class ProcessBinanceImport implements ShouldQueue
                 throw new \RuntimeException($result['message'] ?? 'Falha sem mensagem retornada.');
             }
 
-            if ($session) {
-                $this->completeSession($session, $result);
-            }
+            $this->schedulePricingVerification($session, $result);
 
-            Log::info('[Binance] Job de sincronização anual concluído.', [
+            Log::info('[Binance] Job de sincronização anual concluído; verificação de cotações agendada.', [
                 'user_id' => $this->user->id,
                 'api_key_id' => $this->apiKeyId,
                 'year' => $this->year,
@@ -87,7 +86,7 @@ class ProcessBinanceImport implements ShouldQueue
             ->first();
     }
 
-    private function completeSession(ImportSession $session, array $result): void
+    private function schedulePricingVerification(?ImportSession $session, array $result): void
     {
         $imported = array_sum([
             (int) ($result['spot_trades_imported'] ?? 0),
@@ -96,14 +95,30 @@ class ProcessBinanceImport implements ShouldQueue
             (int) ($result['withdrawals_imported'] ?? 0),
         ]);
 
-        $session->update([
-            'total_rows' => $imported,
-            'processed_rows' => $imported,
-            'successful_rows' => $imported,
-            'settings' => array_merge($session->settings ?? [], [
-                'result' => $result,
-            ]),
-        ]);
-        $session->complete();
+        if ($session) {
+            $session->update([
+                'status' => 'pricing',
+                'total_rows' => $imported,
+                'processed_rows' => $imported,
+                'successful_rows' => $imported,
+                'progress_percentage' => 90,
+                'settings' => array_merge($session->settings ?? [], [
+                    'result' => $result,
+                    'pricing' => [
+                        'status' => 'pending',
+                        'checked' => 0,
+                        'updated' => 0,
+                        'unavailable' => 0,
+                    ],
+                ]),
+            ]);
+        }
+
+        VerifyZeroValueTransactionsJob::dispatch(
+            $this->user->id,
+            $this->apiKeyId,
+            true,
+            $session?->id,
+        )->onQueue('default');
     }
 }

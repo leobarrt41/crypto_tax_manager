@@ -111,8 +111,11 @@
                   <div>
                     <p class="text-sm font-medium">Sincronização {{ exchangeForm.year }}</p>
                     <p class="mt-1 text-xs">{{ syncStatusMessage }}</p>
-                    <p v-if="syncSession.status === 'completed'" class="mt-1 text-xs">
-                      {{ syncSession.transactions_imported }} transações encontradas. A cobertura foi atualizada automaticamente.
+                    <p v-if="['pricing', 'completed'].includes(syncSession.status)" class="mt-1 text-xs">
+                      {{ syncSession.transactions_imported }} transações encontradas. A cobertura será atualizada após a cotação.
+                    </p>
+                    <p v-if="syncSession.status === 'completed' && syncSession.pricing" class="mt-1 text-xs">
+                      Cotação fiscal concluída: {{ syncSession.pricing.updated || 0 }} atualizada(s)<span v-if="syncSession.pricing.unavailable">; {{ syncSession.pricing.unavailable }} sem cotação histórica disponível para revisão</span>.
                     </p>
                     <p v-else-if="syncSession.status === 'failed' && syncSession.error" class="mt-1 text-xs">
                       {{ syncSession.error }}
@@ -622,30 +625,34 @@ let syncStatusTimer = null
 const csvPreview = ref([])
 const csvHeaders = ref([])
 const csvFileInput = ref(null)
-const syncInProgress = computed(() => ['pending', 'processing'].includes(syncSession.value?.status))
+const syncInProgress = computed(() => ['pending', 'processing', 'pricing'].includes(syncSession.value?.status))
 const syncStatusLabel = computed(() => ({
   pending: 'Na fila',
-  processing: 'Em andamento',
+  processing: 'Importando',
+  pricing: 'Cotando valores',
   completed: 'Concluída',
   failed: 'Falhou',
 }[syncSession.value?.status] || 'Sem sincronização'))
 const syncStatusPanelClass = computed(() => ({
   pending: 'border-amber-200 bg-amber-50 text-amber-900',
   processing: 'border-blue-200 bg-blue-50 text-blue-900',
+  pricing: 'border-violet-200 bg-violet-50 text-violet-900',
   completed: 'border-green-200 bg-green-50 text-green-900',
   failed: 'border-red-200 bg-red-50 text-red-900',
 }[syncSession.value?.status] || 'border-gray-200 bg-gray-50 text-gray-700'))
 const syncStatusBadgeClass = computed(() => ({
   pending: 'bg-amber-100 text-amber-800',
   processing: 'bg-blue-100 text-blue-800',
+  pricing: 'bg-violet-100 text-violet-800',
   completed: 'bg-green-100 text-green-800',
   failed: 'bg-red-100 text-red-800',
 }[syncSession.value?.status] || 'bg-gray-100 text-gray-700'))
 const syncStatusMessage = computed(() => {
   if (syncSession.value?.status === 'pending') return 'A sincronização foi solicitada e será iniciada automaticamente pelo servidor.'
   if (syncSession.value?.status === 'processing') return 'A Binance está sendo consultada. Você pode navegar pelo sistema; esta tela se atualizará automaticamente.'
-  if (syncSession.value?.status === 'completed') return 'Sincronização concluída. Revise abaixo quais CSVs ainda são recomendados para conferência.'
-  if (syncSession.value?.status === 'failed') return 'A sincronização não foi concluída. Revise a mensagem e tente novamente.'
+  if (syncSession.value?.status === 'pricing') return 'As transações foram importadas. O sistema está buscando as cotações históricas e a PTAX antes de concluir.'
+  if (syncSession.value?.status === 'completed') return 'Sincronização e cotação concluídas. Revise abaixo quais CSVs ainda são recomendados para conferência.'
+  if (syncSession.value?.status === 'failed') return 'A sincronização ou a cotação não foi concluída. Revise a mensagem e tente novamente.'
   return syncStatusError.value || 'Nenhuma sincronização foi iniciada para esta chave e ano.'
 })
 

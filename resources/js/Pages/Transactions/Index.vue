@@ -321,8 +321,14 @@
                     <p v-if="hasDisplayedTotal(transaction)" class="text-sm font-medium text-gray-900">
                       {{ formatCurrency(getDisplayedTotal(transaction), displayCurrency) }}
                     </p>
+                    <p v-else-if="isPricingUnavailable(transaction)" class="text-sm font-medium text-red-700" :title="transaction.pricing_failure_reason || ''">
+                      Cotação indisponível
+                    </p>
                     <p v-else class="text-sm font-medium text-amber-700">
-                      Pendente de cotação
+                      Cotação em processamento
+                    </p>
+                    <p v-if="isPricingUnavailable(transaction) && transaction.pricing_failure_reason" class="mt-1 max-w-64 text-xs text-red-600" :title="transaction.pricing_failure_reason">
+                      {{ transaction.pricing_failure_reason }}
                     </p>
                     <p class="text-xs text-gray-500">
                       Ref: {{ transaction?.reference || 'N/A' }}
@@ -631,6 +637,8 @@ const getEffectiveRate = (transaction) => {
 }
 
 const hasDisplayedTotal = (transaction) => getDisplayedTotal(transaction) > 0
+
+const isPricingUnavailable = (transaction) => transaction?.pricing_status === 'unavailable'
 
 // Computed para gerar os números de página com elipses
 const paginationPages = computed(() => {

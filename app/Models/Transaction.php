@@ -20,6 +20,10 @@ class Transaction extends Model
         'price',
         'total_usdt',
         'total_brl',
+        'pricing_status',
+        'pricing_attempts',
+        'pricing_last_attempted_at',
+        'pricing_failure_reason',
         'txid',
         'reference',
         'date',
@@ -34,6 +38,8 @@ class Transaction extends Model
         'price' => 'decimal:10',
         'total_usdt' => 'decimal:10',
         'total_brl' => 'decimal:10',
+        'pricing_attempts' => 'integer',
+        'pricing_last_attempted_at' => 'datetime',
     ];
 
     /**

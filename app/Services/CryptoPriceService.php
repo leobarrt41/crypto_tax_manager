@@ -58,12 +58,19 @@ class CryptoPriceService
             ->whereDate('recorded_at', $dateStr)
             ->first();
 
-        if ($existing && $existing->price_brl !== null && $existing->price_usdt !== null) {
+        if ($existing && (float) $existing->price_brl > 0 && (float) $existing->price_usdt > 0) {
             Log::debug("[Preço] Cache banco: {$symbol} em {$dateStr}.");
             return (object)[
                 'price_usd' => (float) $existing->price_usdt,
                 'price_brl' => (float) $existing->price_brl,
             ];
+        }
+
+        if ($existing) {
+            Log::info("[Preço] Cache incompleto será revalidado: {$symbol} em {$dateStr}.", [
+                'price_usdt' => $existing->price_usdt,
+                'price_brl' => $existing->price_brl,
+            ]);
         }
 
         // 2. Stablecoins: USD = 1, BRL = PTAX
@@ -328,7 +335,7 @@ class CryptoPriceService
     private function fetchBinanceKlineClose(string $pair, Carbon $date): ?float
     {
         try {
-            $response = Http::timeout(8)->get('https://api.binance.com/api/v3/klines', [
+            $response = Http::retry(3, 250)->timeout(8)->get('https://api.binance.com/api/v3/klines', [
                 'symbol'    => $pair,
                 'interval'  => '1d',
                 'startTime' => $date->copy()->startOfDay()->getTimestampMs(),

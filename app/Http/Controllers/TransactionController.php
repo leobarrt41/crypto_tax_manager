@@ -615,6 +615,7 @@ public function destroyAll()
             'completed_at' => $session->completed_at?->toIso8601String(),
             'transactions_imported' => (int) $session->successful_rows,
             'result' => data_get($session->settings, 'result'),
+            'pricing' => data_get($session->settings, 'pricing', []),
             'error' => data_get($session->errors, 'message'),
         ];
     }
