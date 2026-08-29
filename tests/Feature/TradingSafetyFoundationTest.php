@@ -133,7 +133,7 @@ class TradingSafetyFoundationTest extends TestCase
         $this->assertSame('outra-estrategia', $guard->runForStrategy(10, 21, fn () => 'outra-estrategia'));
     }
 
-    public function test_audit_log_recursively_masks_sensitive_arrays_and_objects(): void
+    public function test_TradingAuditLogger_recursively_masks_sensitive_arrays_and_objects(): void
     {
         $user = User::factory()->create();
         $log = app(TradingAuditLogger::class)->record(
@@ -145,7 +145,10 @@ class TradingSafetyFoundationTest extends TestCase
                 'api_key' => 'valor-ficticio',
                 'nested' => (object) [
                     'secret' => 'segredo-ficticio',
-                    'deeper' => ['signature' => 'assinatura-ficticia'],
+                    'deeper' => [
+                        'signature' => 'assinatura-ficticia',
+                        'token' => 'token-ficticio',
+                    ],
                 ],
                 'symbol' => 'BTCUSDT',
             ],
@@ -161,12 +164,14 @@ class TradingSafetyFoundationTest extends TestCase
         $this->assertSame('[MASCARADO]', $log->payload['api_key']);
         $this->assertSame('[MASCARADO]', $log->payload['nested']['secret']);
         $this->assertSame('[MASCARADO]', $log->payload['nested']['deeper']['signature']);
+        $this->assertSame('[MASCARADO]', $log->payload['nested']['deeper']['token']);
         $this->assertSame('BTCUSDT', $log->payload['symbol']);
 
         $rawPayload = (string) DB::table('trading_logs')->where('id', $log->id)->value('payload');
         $this->assertStringNotContainsString('valor-ficticio', $rawPayload);
         $this->assertStringNotContainsString('segredo-ficticio', $rawPayload);
         $this->assertStringNotContainsString('assinatura-ficticia', $rawPayload);
+        $this->assertStringNotContainsString('token-ficticio', $rawPayload);
     }
 
     public function test_execution_backtest_order_and_exchange_order_webhook_routes_are_not_active(): void

@@ -37,6 +37,7 @@ class TradingAuditLogger
             'secret',
             'secret_key',
             'signature',
+            'token',
             'authorization',
             'passphrase',
         ];
