@@ -177,6 +177,7 @@
                 </svg>
                 <div>
                   <h4 class="text-sm font-medium text-blue-800">Regra aplicável à competência</h4>
+                  <p v-if="selectedCompetenceLabel" class="text-xs text-blue-600 mt-1">Competência selecionada: <strong>{{ selectedCompetenceLabel }}</strong></p>
                   <div v-if="currentRule" class="text-sm text-blue-700 mt-1 space-y-1">
                     <p><strong>{{ currentRule.obligation_name }}</strong> — {{ currentRule.legal_reference || 'regra fiscal cadastrada' }}.</p>
                     <p>Obrigatória quando o volume mensal for superior a <strong>{{ formatCurrency(currentRule.monthly_threshold_brl) }}</strong>.</p>
@@ -476,6 +477,12 @@ const canGenerateLegacy = computed(() => legacyExportAvailable.value && monthSta
 const obligationName = computed(() => currentRule.value?.obligation_name || 'Obrigação de criptoativos')
 const pageTitle = computed(() => `Declaração de criptoativos — ${obligationName.value}`)
 const selectedYearForStatus = computed(() => Number(form.value.year) || currentYear)
+const selectedCompetenceLabel = computed(() => {
+  const year = Number(form.value.year)
+  const month = Number(form.value.month)
+  return year > 0 && month >= 1 && month <= 12 ? `${getMonthName(month)}/${year}` : ''
+})
+let competenceRequestVersion = 0
 
 const loadAnnualStatus = async () => {
   const yearToLoad = selectedYearForStatus.value
@@ -603,38 +610,69 @@ const generateIN1888 = async () => {
 }
 
 
-// Watch for period changes to load month stats
+const resetCompetenceData = () => {
+  currentRule.value = null
+  monthStats.value = {
+    ...monthStats.value,
+    total_operations: 0,
+    total_volume: 0,
+    is_required: false,
+    status: 'Selecione a competência',
+  }
+}
+
+// A regra deve acompanhar a competência escolhida, inclusive na transição de 2026.
 watch([() => form.value.year, () => form.value.month], async ([newYear, newMonth]) => {
-  if (newYear && newMonth) {
-    try {
-      const response = await fetch(`/tax-reports/in1888-status/monthly?year=${newYear}&month=${newMonth}`, {
-        headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }
-      })
+  const year = Number(newYear)
+  const month = Number(newMonth)
+  const requestVersion = ++competenceRequestVersion
 
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`)
-      }
+  if (!year || month < 1 || month > 12) {
+    resetCompetenceData()
+    return
+  }
 
-      const data = await response.json()
-      currentRule.value = data.rule ?? null
-      monthStats.value = {
-        ...monthStats.value,
-        total_operations: data.transactions_count ?? 0,
-        total_volume: data.volume_brl ?? 0,
-        is_required: data.status === 'required',
-        status: data.status_label ?? 'Sem dados',
-      }
-    } catch (error) {
-      console.error('Erro ao carregar estatísticas:', error)
-      currentRule.value = null
-      monthStats.value = {
-        ...monthStats.value,
-        total_operations: 0,
-        total_volume: 0,
-        is_required: false,
-        status: 'Erro ao carregar',
-      }
+  currentRule.value = null
+  monthStats.value = {
+    ...monthStats.value,
+    total_operations: 0,
+    total_volume: 0,
+    is_required: false,
+    status: 'Carregando regra...',
+  }
+
+  try {
+    const response = await fetch(`/tax-reports/in1888-status/monthly?year=${year}&month=${month}`, {
+      headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }
+    })
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`)
+    }
+
+    const data = await response.json()
+    if (requestVersion !== competenceRequestVersion) return
+
+    currentRule.value = data.rule ?? null
+    monthStats.value = {
+      ...monthStats.value,
+      total_operations: data.transactions_count ?? 0,
+      total_volume: data.volume_brl ?? 0,
+      is_required: data.status === 'required',
+      status: data.status_label ?? 'Sem dados',
+    }
+  } catch (error) {
+    if (requestVersion !== competenceRequestVersion) return
+
+    console.error('Erro ao carregar estatísticas:', error)
+    currentRule.value = null
+    monthStats.value = {
+      ...monthStats.value,
+      total_operations: 0,
+      total_volume: 0,
+      is_required: false,
+      status: 'Erro ao carregar',
     }
   }
-})
+}, { immediate: true })
 </script>
