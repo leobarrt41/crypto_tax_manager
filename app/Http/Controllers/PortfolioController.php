@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\CryptoAsset;
+use App\Services\BinancePortfolioSyncService;
 use App\Services\PortfolioMetricsService;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
@@ -12,8 +13,10 @@ class PortfolioController extends Controller
 {
     private const PERIODS = ['24h', '7d', '30d', '90d', '1y', 'all'];
 
-    public function __construct(private readonly PortfolioMetricsService $metrics)
-    {
+    public function __construct(
+        private readonly PortfolioMetricsService $metrics,
+        private readonly BinancePortfolioSyncService $binanceBalanceSync,
+    ) {
     }
 
     /**
@@ -55,6 +58,34 @@ class PortfolioController extends Controller
         return Inertia::render('Portfolio/Allocation', [
             'allocation' => $this->metrics->allocation($request->user()),
         ]);
+    }
+
+    /**
+     * Atualiza a fotografia dos saldos Spot das chaves Binance e redireciona
+     * à página com o resumo recalculado. Não importa nem altera transações.
+     */
+    public function refresh(Request $request)
+    {
+        try {
+            $result = $this->binanceBalanceSync->sync($request->user());
+
+            if ($result['keys_processed'] === 0) {
+                return back()->with('error', 'Nenhuma chave Binance foi encontrada para atualizar o Portfólio.');
+            }
+
+            return back()->with('success', sprintf(
+                'Portfólio atualizado: %d ativo(s) com saldo; %d preço(s) atualizados%s.',
+                $result['assets_with_balance'],
+                $result['prices_updated'],
+                $result['prices_unavailable'] > 0
+                    ? "; {$result['prices_unavailable']} ativo(s) sem preço atual disponível"
+                    : '',
+            ));
+        } catch (\Throwable $exception) {
+            report($exception);
+
+            return back()->with('error', 'Não foi possível atualizar os saldos Binance. Verifique se a chave possui permissão de leitura e tente novamente.');
+        }
     }
 
     /**

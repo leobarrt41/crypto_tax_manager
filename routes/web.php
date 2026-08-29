@@ -128,6 +128,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::get('/analytics', [PortfolioController::class, 'analytics'])->name('analytics');
         Route::get('/performance', [PortfolioController::class, 'performance'])->name('performance');
         Route::get('/allocation', [PortfolioController::class, 'allocation'])->name('allocation');
+        Route::post('/refresh', [PortfolioController::class, 'refresh'])->name('refresh');
         
         // API endpoints para gráficos
         Route::get('/api/summary', [PortfolioController::class, 'apiSummary'])->name('api.summary');
