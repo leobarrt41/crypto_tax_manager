@@ -174,7 +174,7 @@ class TransactionVerificationSourceIdTest extends TestCase
         $this->assertSame('completed', $transaction->fresh()->pricing_status);
     }
 
-    public function test_unavailable_price_is_recorded_for_review_instead_of_remaining_pending(): void
+    public function test_conversion_sent_in_usdt_uses_the_sent_value_without_pricing_the_received_asset(): void
     {
         $user = User::query()->create([
             'name' => 'Pessoa de Teste',
@@ -192,14 +192,16 @@ class TransactionVerificationSourceIdTest extends TestCase
             'to_amount' => 10,
             'total_usdt' => 0,
             'total_brl' => 0,
+            'pricing_status' => 'unavailable',
+            'pricing_failure_reason' => 'Cotação histórica não encontrada.',
             'date' => '2026-04-10 05:37:00',
             'source_type' => 'App\\Models\\UserApiKey',
             'source_id' => 22,
         ]);
 
         $price = new CryptoAssetPrice();
-        $price->price_usd = 0;
-        $price->price_brl = 0;
+        $price->price_usd = 1;
+        $price->price_brl = 5;
 
         $priceService = Mockery::mock(CryptoPriceService::class);
         $priceService->shouldReceive('getOrCreatePrice')->once()->andReturn($price);
@@ -208,9 +210,11 @@ class TransactionVerificationSourceIdTest extends TestCase
         $result = app(TransactionVerificationService::class)
             ->verifyAndUpdateZeroValueTransactions($user, 22);
 
-        $this->assertSame(1, $result['total_failed']);
-        $this->assertSame('unavailable', $transaction->fresh()->pricing_status);
+        $this->assertSame(1, $result['total_updated']);
+        $this->assertSame('50.0000000000', $transaction->fresh()->total_usdt);
+        $this->assertSame('250.0000000000', $transaction->fresh()->total_brl);
+        $this->assertSame('completed', $transaction->fresh()->pricing_status);
         $this->assertSame(1, $transaction->fresh()->pricing_attempts);
-        $this->assertStringContainsString('cotação histórica Binance', $transaction->fresh()->pricing_failure_reason);
+        $this->assertNull($transaction->fresh()->pricing_failure_reason);
     }
 }

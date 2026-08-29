@@ -65,7 +65,15 @@ class TransactionVerificationService
             })
             ->where(function ($query) {
                 $query->whereNull('pricing_status')
-                    ->orWhereIn('pricing_status', ['pending', 'processing']);
+                    ->orWhereIn('pricing_status', ['pending', 'processing'])
+                    ->orWhere(function ($query) {
+                        $query->where('pricing_status', 'unavailable')
+                            ->where('type', 'convert')
+                            ->where(function ($query) {
+                                $query->whereIn('from_asset', [...self::STABLECOINS, 'BRL'])
+                                    ->orWhereIn('to_asset', [...self::STABLECOINS, 'BRL']);
+                            });
+                    });
             });
             
         if ($sourceId) {
@@ -255,10 +263,25 @@ class TransactionVerificationService
      */
     private function calculateConversionValues(Transaction $transaction, Carbon $date): array
     {
+        $fromAsset = strtoupper((string) $transaction->from_asset);
+        $fromAmount = (float) $transaction->from_amount;
         $toAsset = strtoupper((string) $transaction->to_asset);
         $toAmount = (float) $transaction->to_amount;
 
-        if ($toAsset === 'BRL') {
+        // Priorizar o lado da operação cujo valor fiscal já é conhecido. Em uma
+        // conversão USDT -> cripto, por exemplo, não é necessário encontrar a
+        // cotação histórica do ativo recebido para saber quanto foi alienado.
+        if (in_array($fromAsset, self::STABLECOINS, true)) {
+            $totalUsdt = $fromAmount;
+            $totalBrl = $this->calculateTotalBrl($totalUsdt, $date);
+        } elseif ($fromAsset === 'BRL') {
+            $totalBrl = $fromAmount;
+            $usdBrlRate = $this->getUsdBrlRate($date);
+            $totalUsdt = $usdBrlRate > 0 ? $totalBrl / $usdBrlRate : 0;
+        } elseif (in_array($toAsset, self::STABLECOINS, true)) {
+            $totalUsdt = $toAmount;
+            $totalBrl = $this->calculateTotalBrl($totalUsdt, $date);
+        } elseif ($toAsset === 'BRL') {
             $totalBrl = $toAmount;
             $usdBrlRate = $this->getUsdBrlRate($date);
             $totalUsdt = $usdBrlRate > 0 ? $totalBrl / $usdBrlRate : 0;
@@ -472,4 +495,3 @@ class TransactionVerificationService
         return $report;
     }
 }
-
