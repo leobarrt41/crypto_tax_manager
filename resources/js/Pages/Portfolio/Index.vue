@@ -25,13 +25,6 @@
           </div>
         </header>
 
-        <div v-if="flashSuccess" class="mt-4 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800" role="status">
-          {{ flashSuccess }}
-        </div>
-        <div v-if="flashError" class="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800" role="alert">
-          {{ flashError }}
-        </div>
-
         <div class="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4 mt-6">
           <StatCard
             title="Valor total"
@@ -200,7 +193,7 @@
 
 <script setup>
 import { computed, ref } from 'vue'
-import { Link, router, usePage } from '@inertiajs/vue3'
+import { Link, router } from '@inertiajs/vue3'
 import AppLayout from '@/Layouts/AppLayout.vue'
 import StatCard from '@/Components/StatCard.vue'
 import EmptyState from '@/Components/EmptyState.vue'
@@ -223,11 +216,8 @@ const props = defineProps({
   recentActivity: { type: Array, default: () => [] },
 })
 
-const page = usePage()
 const refreshing = ref(false)
 const selectedPeriod = ref(props.portfolio.period || '30d')
-const flashSuccess = computed(() => page.props.flash?.success || '')
-const flashError = computed(() => page.props.flash?.error || '')
 const periods = [
   { value: '24h', label: '24 horas' }, { value: '7d', label: '7 dias' },
   { value: '30d', label: '30 dias' }, { value: '90d', label: '90 dias' },

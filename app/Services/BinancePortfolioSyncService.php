@@ -4,6 +4,8 @@ namespace App\Services;
 
 use App\Models\CryptoAsset;
 use App\Models\Network;
+use App\Models\Portfolio;
+use App\Models\PortfolioSnapshot;
 use App\Models\User;
 use App\Models\UserApiKey;
 use App\Models\Wallet;
@@ -16,8 +18,8 @@ use RuntimeException;
 
 /**
  * Sincroniza os saldos Spot atuais das chaves Binance para a estrutura de
- * carteiras consumida pelo Portfólio. Não reconstrói histórico nem altera
- * transações fiscais.
+ * carteiras consumida pelo Portfólio e importa os snapshots diários Spot que
+ * a Binance ainda disponibiliza. Não altera transações fiscais.
  */
 class BinancePortfolioSyncService
 {
@@ -29,7 +31,7 @@ class BinancePortfolioSyncService
     }
 
     /**
-     * @return array{keys_processed:int, wallets_updated:int, balances_updated:int, assets_with_balance:int, prices_updated:int, prices_unavailable:int}
+     * @return array{keys_processed:int, wallets_updated:int, balances_updated:int, assets_with_balance:int, prices_updated:int, prices_unavailable:int, historical_snapshots_imported:int, historical_snapshots_unpriced:int}
      */
     public function sync(User $user): array
     {
@@ -46,6 +48,8 @@ class BinancePortfolioSyncService
             'assets_with_balance' => 0,
             'prices_updated' => 0,
             'prices_unavailable' => 0,
+            'historical_snapshots_imported' => 0,
+            'historical_snapshots_unpriced' => 0,
         ];
 
         if ($apiKeys->isEmpty()) {
@@ -120,12 +124,140 @@ class BinancePortfolioSyncService
             }
         }
 
+        $this->importDailyAccountSnapshots($user, $apiKeys, $result);
+
         Log::info('[Portfólio] Saldos Binance sincronizados.', [
             'user_id' => $user->id,
             ...$result,
         ]);
 
         return $result;
+    }
+
+    /**
+     * Preenche o histórico recente com a fotografia diária oficial da conta.
+     * A Binance já fornece o total consolidado em BTC; assim fazemos somente
+     * uma precificação histórica por dia, sem disparar uma chamada por ativo.
+     *
+     * @param Collection<int, UserApiKey> $apiKeys
+     * @param array<string, int> $result
+     */
+    private function importDailyAccountSnapshots(User $user, Collection $apiKeys, array &$result): void
+    {
+        $snapshotsByDate = [];
+
+        foreach ($apiKeys as $apiKey) {
+            try {
+                foreach ($this->fetchDailyAccountSnapshots($apiKey) as $snapshot) {
+                    $timestamp = (int) ($snapshot['updateTime'] ?? 0);
+                    if ($timestamp <= 0) {
+                        continue;
+                    }
+
+                    $date = Carbon::createFromTimestampMs($timestamp, 'UTC')->startOfDay();
+                    $dateKey = $date->toDateString();
+                    $snapshotsByDate[$dateKey] ??= [
+                        'date' => $date,
+                        'total_btc' => 0.0,
+                        'assets' => [],
+                    ];
+                    $snapshotsByDate[$dateKey]['total_btc'] += (float) data_get($snapshot, 'data.totalAssetOfBtc', 0);
+
+                    foreach ((array) data_get($snapshot, 'data.balances', []) as $balance) {
+                        $symbol = strtoupper(trim((string) ($balance['asset'] ?? '')));
+                        $quantity = (float) ($balance['free'] ?? 0) + (float) ($balance['locked'] ?? 0);
+                        if ($symbol !== '' && $quantity > 0) {
+                            $snapshotsByDate[$dateKey]['assets'][$symbol] =
+                                ($snapshotsByDate[$dateKey]['assets'][$symbol] ?? 0.0) + $quantity;
+                        }
+                    }
+                }
+            } catch (\Throwable $exception) {
+                // O histórico é complementar: uma restrição desse endpoint não
+                // deve desfazer a sincronização bem-sucedida do saldo atual.
+                Log::warning('[Portfólio] Histórico diário Binance indisponível.', [
+                    'user_id' => $user->id,
+                    'api_key_id' => $apiKey->id,
+                    'error' => $exception->getMessage(),
+                ]);
+            }
+        }
+
+        if ($snapshotsByDate === []) {
+            return;
+        }
+
+        $portfolio = Portfolio::query()->firstOrCreate(
+            ['user_id' => $user->id, 'name' => 'Portfolio Principal'],
+            ['is_active' => true],
+        );
+
+        ksort($snapshotsByDate);
+        foreach ($snapshotsByDate as $snapshotData) {
+            $existing = PortfolioSnapshot::query()
+                ->where('portfolio_id', $portfolio->id)
+                ->whereDate('snapshot_date', $snapshotData['date'])
+                ->first();
+
+            // Um snapshot calculado pelo próprio sistema possui custo e P&L e é
+            // mais completo; nunca o substituímos pelo resumo vindo da Binance.
+            if ($existing && data_get($existing->data, 'source') !== 'binance_account_snapshot') {
+                continue;
+            }
+
+            $btcPrice = $this->priceService->getOrCreatePrice('BTC', $snapshotData['date']);
+            $btcPriceBrl = (float) ($btcPrice->price_brl ?? 0);
+            if ($btcPriceBrl <= 0) {
+                $result['historical_snapshots_unpriced']++;
+                continue;
+            }
+
+            $historicalSnapshot = $existing ?? new PortfolioSnapshot();
+            $historicalSnapshot->fill([
+                'portfolio_id' => $portfolio->id,
+                'total_value_brl' => round($snapshotData['total_btc'] * $btcPriceBrl, 2),
+                'total_value_usd' => null,
+                'total_pnl' => null,
+                'snapshot_date' => $snapshotData['date'],
+                'data' => [
+                    'source' => 'binance_account_snapshot',
+                    'total_asset_btc' => $snapshotData['total_btc'],
+                    'assets' => collect($snapshotData['assets'])->map(
+                        fn (float $quantity, string $symbol) => compact('symbol', 'quantity')
+                    )->values()->all(),
+                ],
+            ])->save();
+            $result['historical_snapshots_imported']++;
+        }
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    private function fetchDailyAccountSnapshots(UserApiKey $apiKey): array
+    {
+        $params = [
+            'type' => 'SPOT',
+            'startTime' => now('UTC')->subDays(29)->startOfDay()->getTimestampMs(),
+            'endTime' => now('UTC')->getTimestampMs(),
+            'limit' => 30,
+            'timestamp' => (int) round(microtime(true) * 1000),
+            'recvWindow' => 15000,
+        ];
+        $params['signature'] = hash_hmac('sha256', http_build_query($params), $apiKey->secret_key);
+
+        $response = Http::timeout(30)
+            ->withHeaders(['X-MBX-APIKEY' => $apiKey->api_key])
+            ->get('https://api.binance.com/sapi/v1/accountSnapshot', $params);
+
+        if (!$response->successful()) {
+            throw new RuntimeException('Não foi possível consultar snapshots Spot da Binance: HTTP ' . $response->status());
+        }
+
+        $snapshots = $response->json('snapshotVos', []);
+        if (!is_array($snapshots)) {
+            throw new RuntimeException('A Binance retornou um histórico de saldo inválido.');
+        }
+
+        return $snapshots;
     }
 
     private function walletForApiKey(User $user, UserApiKey $apiKey, int $networkId): Wallet

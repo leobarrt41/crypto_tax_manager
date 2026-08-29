@@ -73,13 +73,23 @@ class PortfolioController extends Controller
                 return back()->with('error', 'Nenhuma chave Binance foi encontrada para atualizar o Portfólio.');
             }
 
+            $assetsLabel = $result['assets_with_balance'] === 1 ? 'ativo' : 'ativos';
+            $pricesLabel = $result['prices_updated'] === 1 ? 'preço atualizado' : 'preços atualizados';
+            $unavailableAssetsLabel = $result['prices_unavailable'] === 1 ? 'ativo' : 'ativos';
+            $historyMessage = $result['historical_snapshots_imported'] > 0
+                ? sprintf('; %d snapshots históricos Binance sincronizados', $result['historical_snapshots_imported'])
+                : '';
+
             return back()->with('success', sprintf(
-                'Portfólio atualizado: %d ativo(s) com saldo; %d preço(s) atualizados%s.',
+                'Portfólio atualizado: %d %s com saldo; %d %s%s%s.',
                 $result['assets_with_balance'],
+                $assetsLabel,
                 $result['prices_updated'],
+                $pricesLabel,
                 $result['prices_unavailable'] > 0
-                    ? "; {$result['prices_unavailable']} ativo(s) sem preço atual disponível"
+                    ? "; {$result['prices_unavailable']} {$unavailableAssetsLabel} sem preço atual disponível"
                     : '',
+                $historyMessage,
             ));
         } catch (\Throwable $exception) {
             report($exception);

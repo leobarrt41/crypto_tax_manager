@@ -1,27 +1,27 @@
 <template>
   <div class="bg-white shadow rounded-lg p-4">
-    <div class="flex items-center">
+    <div class="flex items-start">
       <div class="flex-shrink-0">
         <div class="w-8 h-8 bg-indigo-500 rounded-md flex items-center justify-center">
           <component :is="iconComponent" class="w-5 h-5 text-white" />
         </div>
       </div>
-      <div class="ml-5 w-0 flex-1">
+      <div class="ml-4 min-w-0 flex-1">
         <dl>
-          <dt class="text-sm font-medium text-gray-500 truncate">
+          <dt class="min-h-10 text-sm font-medium leading-5 text-gray-500">
             {{ title }}
           </dt>
-          <dd class="flex items-baseline">
-            <div class="text-2xl font-semibold text-gray-900">
+          <dd class="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-1">
+            <div class="whitespace-nowrap text-2xl font-semibold tabular-nums text-gray-900">
               {{ formattedValue }}
             </div>
             <div 
               v-if="change !== null" 
-              class="ml-2 flex items-baseline text-sm font-semibold"
+              class="flex items-center whitespace-nowrap text-sm font-semibold tabular-nums"
               :class="changeColor"
             >
               <component :is="changeIcon" class="self-center w-4 h-4" />
-              <span class="ml-1">{{ Math.abs(change) }}%</span>
+              <span class="ml-1">{{ formattedChange }}</span>
             </div>
           </dd>
           <dt v-if="subtitle" class="text-xs text-gray-400 mt-1">{{ subtitle }}</dt>
@@ -103,6 +103,16 @@ const formattedValue = computed(() => {
   } else {
     return new Intl.NumberFormat('pt-BR').format(numericValue)
   }
+})
+
+const formattedChange = computed(() => {
+  const numericChange = Number(props.change)
+  if (!Number.isFinite(numericChange)) return '—'
+
+  return `${new Intl.NumberFormat('pt-BR', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2
+  }).format(Math.abs(numericChange))}%`
 })
 
 const changeColor = computed(() => {

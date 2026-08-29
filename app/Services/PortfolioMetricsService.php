@@ -164,6 +164,14 @@ class PortfolioMetricsService
             ->where('snapshot_date', '>=', $startDate->copy()->startOfDay())
             ->orderBy('snapshot_date')
             ->get()
+            // Snapshots vazios criados antes da primeira sincronização não
+            // representam uma queda ou crescimento real do portfólio. Remover
+            // apenas os zeros iniciais preserva uma liquidação posterior real.
+            ->skipUntil(function (PortfolioSnapshot $snapshot) {
+                $assets = data_get($snapshot->data, 'assets', []);
+
+                return (float) $snapshot->total_value_brl > 0 || !empty($assets);
+            })
             ->map(fn (PortfolioSnapshot $snapshot) => [
                 'date' => $snapshot->snapshot_date->toDateString(),
                 'value_brl' => (float) $snapshot->total_value_brl,
@@ -396,6 +404,19 @@ class PortfolioMetricsService
             'pnl_percentage' => $totalInvested > 0 && $totalPnl !== null ? ($totalPnl / $totalInvested) * 100 : 0,
             'last_updated_at' => now(),
         ])->save();
+
+        $hasAssets = $assets->isNotEmpty();
+        $hasPreviousPosition = PortfolioSnapshot::query()
+            ->where('portfolio_id', $portfolio->id)
+            ->where('total_value_brl', '>', 0)
+            ->exists();
+
+        // Um portfólio que nunca teve posição não deve produzir um ponto zero
+        // artificial. Depois do primeiro snapshot positivo, zero é mantido para
+        // representar corretamente uma eventual liquidação total.
+        if (!$hasAssets && $totalValue <= 0 && !$hasPreviousPosition) {
+            return;
+        }
 
         $snapshot = PortfolioSnapshot::query()
             ->where('portfolio_id', $portfolio->id)
