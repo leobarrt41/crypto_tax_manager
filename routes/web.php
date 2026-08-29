@@ -138,10 +138,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
 
     // ===== TRADING BOT =====
     Route::prefix('trading-bot')->name('trading-bot.')->group(function () {
-        Route::get('/', [TradingBotController::class, 'dashboard'])->name('dashboard');
-        Route::post('/start', [TradingBotController::class, 'start'])->name('start');
-        Route::post('/stop', [TradingBotController::class, 'stop'])->name('stop');
-        Route::get('/status', [TradingBotController::class, 'status'])->name('status');
+        Route::get('/', [TradingBotController::class, 'index'])->name('dashboard');
     });
 
     // ===== ESTRATÉGIAS DE TRADING =====
@@ -154,18 +151,12 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::patch('/{strategy}', [TradingStrategyController::class, 'update'])->name('update');
         Route::delete('/{strategy}', [TradingStrategyController::class, 'destroy'])->name('destroy');
         
-        // Ações especiais
-        Route::post('/{strategy}/start', [TradingStrategyController::class, 'start'])->name('start');
-        Route::post('/{strategy}/stop', [TradingStrategyController::class, 'stop'])->name('stop');
-        Route::post('/{strategy}/backtest', [TradingStrategyController::class, 'backtest'])->name('backtest');
     });
 
     // ===== ORDENS DO BOT =====
     Route::prefix('bot-orders')->name('bot-orders.')->group(function () {
         Route::get('/', [BotOrderController::class, 'index'])->name('index');
         Route::get('/{order}', [BotOrderController::class, 'show'])->name('show');
-        Route::post('/{order}/cancel', [BotOrderController::class, 'cancel'])->name('cancel');
-        Route::delete('/{order}', [BotOrderController::class, 'destroy'])->name('destroy');
     });
 
     // ===== LOGS DE TRADING =====

@@ -27,8 +27,8 @@ return new class extends Migration
         // Mantém o registro mais antigo (menor id) para cada par (user_id, reference).
         $driver = DB::getDriverName();
 
-        if ($driver === 'pgsql') {
-            // PostgreSQL: deleta duplicatas mantendo o menor id
+        if (in_array($driver, ['pgsql', 'sqlite'], true)) {
+            // PostgreSQL e SQLite: deleta duplicatas mantendo o menor id
             DB::statement("
                 DELETE FROM transactions
                 WHERE id NOT IN (

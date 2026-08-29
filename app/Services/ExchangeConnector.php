@@ -8,6 +8,12 @@ use Illuminate\Support\Facades\Log;
 
 class ExchangeConnector
 {
+    public function __construct(
+        private readonly TradingExecutionGuard $executionGuard,
+        private readonly TradingAuditLogger $auditLogger,
+    ) {
+    }
+
     protected $exchangeConfigs = [
         'binance' => [
             'base_url' => 'https://api.binance.com',
@@ -79,6 +85,8 @@ class ExchangeConnector
     public function placeOrder(UserApiKey $apiKey, $orderData)
     {
         try {
+            $this->executionGuard->assertRealOrderSubmissionAllowed($apiKey);
+
             switch ($apiKey->exchange) {
                 case 'binance':
                     return $this->placeBinanceOrder($apiKey, $orderData);
@@ -92,7 +100,25 @@ class ExchangeConnector
                     throw new \Exception("Exchange não suportada: {$apiKey->exchange}");
             }
         } catch (\Exception $e) {
-            Log::error("Erro ao colocar ordem: " . $e->getMessage());
+            if ($apiKey->user_id) {
+                $this->auditLogger->record(
+                    (int) $apiKey->user_id,
+                    'real_order_blocked',
+                    'Tentativa de envio de ordem real bloqueada pela política da Fase 0.',
+                    'warning',
+                    payload: [
+                        'user_api_key_id' => $apiKey->id,
+                        'order' => (array) $orderData,
+                    ],
+                    source: 'exchange_connector',
+                );
+            }
+
+            Log::warning('Envio de ordem bloqueado ou falhou.', [
+                'user_api_key_id' => $apiKey->id,
+                'message' => $e->getMessage(),
+            ]);
+
             return ['success' => false, 'error' => $e->getMessage()];
         }
     }
@@ -673,4 +699,3 @@ class ExchangeConnector
         return ['success' => true, 'error' => null];
     }
 }
-
