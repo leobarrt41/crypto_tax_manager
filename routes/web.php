@@ -16,6 +16,7 @@ use App\Http\Controllers\In1888StatusController;
 use App\Http\Controllers\PortfolioController;
 use App\Http\Controllers\NotificationController;
 use App\Http\Controllers\TradingBotController;
+use App\Http\Controllers\StrategyDefinitionController;
 use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
@@ -136,22 +137,24 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::get('/api/allocation-data', [PortfolioController::class, 'apiAllocationData'])->name('api.allocation');
     });
 
-    // ===== TRADING BOT =====
+    // ===== TRADING BOT — FASE 1: ESTRATÉGIAS, SEM EXECUÇÃO =====
     Route::prefix('trading-bot')->name('trading-bot.')->group(function () {
-        Route::get('/', [TradingBotController::class, 'index'])->name('dashboard');
+        Route::get('/', [StrategyDefinitionController::class, 'index'])->name('index');
+        Route::prefix('strategies')->name('strategies.')->group(function () {
+            Route::get('/', [StrategyDefinitionController::class, 'index'])->name('index');
+            Route::get('/create', [StrategyDefinitionController::class, 'create'])->name('create');
+            Route::post('/', [StrategyDefinitionController::class, 'store'])->name('store');
+            Route::post('/validate', [StrategyDefinitionController::class, 'validateDefinition'])->name('validate');
+            Route::get('/{strategy}', [StrategyDefinitionController::class, 'show'])->name('show');
+            Route::get('/{strategy}/edit', [StrategyDefinitionController::class, 'edit'])->name('edit');
+            Route::patch('/{strategy}', [StrategyDefinitionController::class, 'update'])->name('update');
+            Route::post('/{strategy}/archive', [StrategyDefinitionController::class, 'archive'])->name('archive');
+            Route::post('/{strategy}/preview', [StrategyDefinitionController::class, 'preview'])->name('preview');
+        });
     });
 
-    // ===== ESTRATÉGIAS DE TRADING =====
-    Route::prefix('trading-strategies')->name('trading-strategies.')->group(function () {
-        Route::get('/', [TradingStrategyController::class, 'index'])->name('index');
-        Route::get('/create', [TradingStrategyController::class, 'create'])->name('create');
-        Route::post('/', [TradingStrategyController::class, 'store'])->name('store');
-        Route::get('/{strategy}', [TradingStrategyController::class, 'show'])->name('show');
-        Route::get('/{strategy}/edit', [TradingStrategyController::class, 'edit'])->name('edit');
-        Route::patch('/{strategy}', [TradingStrategyController::class, 'update'])->name('update');
-        Route::delete('/{strategy}', [TradingStrategyController::class, 'destroy'])->name('destroy');
-        
-    });
+    // URL legada preservada somente como redirecionamento; não há mais rotas de iniciar, parar ou backtest.
+    Route::redirect('/trading-strategies', '/trading-bot/strategies');
 
     // ===== ORDENS DO BOT =====
     Route::prefix('bot-orders')->name('bot-orders.')->group(function () {

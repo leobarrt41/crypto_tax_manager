@@ -3,7 +3,6 @@
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\DashboardController;
-use App\Http\Controllers\TradingBotController;
 use App\Http\Controllers\TransactionController;
 use App\Http\Controllers\CryptoAssetController;
 use App\Http\Controllers\ExchangeKeyController;
@@ -172,8 +171,7 @@ Route::prefix('market')->group(function () {
 |--------------------------------------------------------------------------
 */
 Route::prefix('webhooks')->group(function () {
-    
-    // Price alerts
+    // Alerta de preço não cria, cancela nem atualiza ordens de trading.
     Route::post('/price-alert', [CryptoAssetController::class, 'handlePriceAlert']);
 });
 
