@@ -2,8 +2,10 @@
 
 namespace App\Services;
 
+use App\Models\Transaction;
 use App\Models\TransactionImportCoverage;
 use App\Models\User;
+use App\Models\UserApiKey;
 use Carbon\Carbon;
 
 class TransactionImportCoverageService
@@ -72,6 +74,71 @@ class TransactionImportCoverageService
         }
 
         return $query->whereIn('api_status', ['completed', 'partial'])->exists();
+    }
+
+    /**
+     * Um checkpoint só pode pular uma nova consulta quando os registros que ele
+     * afirma ter encontrado ainda existem na tabela de transações. Checkpoints
+     * com zero resultados continuam válidos sem exigir registros locais.
+     */
+    public function hasConsistentApiCheckpoint(
+        User $user,
+        int $exchangeId,
+        int $apiKeyId,
+        int $year,
+        int $month,
+        string $eventType,
+    ): bool {
+        $checkpoint = TransactionImportCoverage::query()
+            ->where([
+                'user_id' => $user->id,
+                'exchange_id' => $exchangeId,
+                'year' => $year,
+                'month' => $month,
+                'event_type' => $eventType,
+            ])
+            ->first();
+
+        if (!$checkpoint) {
+            return false;
+        }
+
+        $wasChecked = $eventType === 'spot_trade'
+            ? $checkpoint->api_status === 'partial'
+                && str_starts_with((string) $checkpoint->api_error, 'spot_pairs_checked:')
+            : $checkpoint->api_status === 'completed';
+
+        if (!$wasChecked) {
+            return false;
+        }
+
+        $expectedRecords = (int) $checkpoint->api_records_count;
+        if ($expectedRecords === 0) {
+            return true;
+        }
+
+        $transactionType = match ($eventType) {
+            'spot_trade' => 'trade',
+            'convert' => 'convert',
+            'deposit' => 'deposit',
+            'withdrawal' => 'withdrawal',
+            default => null,
+        };
+
+        if ($transactionType === null) {
+            return false;
+        }
+
+        $persistedRecords = Transaction::query()
+            ->where('user_id', $user->id)
+            ->where('source_type', UserApiKey::class)
+            ->where('source_id', $apiKeyId)
+            ->whereYear('date', $year)
+            ->whereMonth('date', $month)
+            ->where('type', $transactionType)
+            ->count();
+
+        return $persistedRecords >= $expectedRecords;
     }
 
     public function recordCsvCoverage(

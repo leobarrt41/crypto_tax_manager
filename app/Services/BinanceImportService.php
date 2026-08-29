@@ -141,7 +141,14 @@ public function runSmartImport(?int $year = null): array
                 'events' => [],
             ];
 
-            if (!$isCurrentMonth && $this->coverageService->wasApiChecked($this->user, $this->apiKey->exchange_id, $year, $month, 'spot_trade')) {
+            if (!$isCurrentMonth && $this->coverageService->hasConsistentApiCheckpoint(
+                $this->user,
+                $this->apiKey->exchange_id,
+                $this->apiKey->id,
+                $year,
+                $month,
+                'spot_trade',
+            )) {
                 $monthResult['events']['spot_trade'] = 'skipped';
             } else {
                 try {
@@ -184,7 +191,14 @@ public function runSmartImport(?int $year = null): array
                 'deposit' => fn () => $this->importDepositsForMonth($monthStart, $monthEnd),
                 'withdrawal' => fn () => $this->importWithdrawalsForMonth($monthStart, $monthEnd),
             ] as $eventType => $importer) {
-                if (!$isCurrentMonth && $this->coverageService->wasApiCovered($this->user, $this->apiKey->exchange_id, $year, $month, $eventType)) {
+                if (!$isCurrentMonth && $this->coverageService->hasConsistentApiCheckpoint(
+                    $this->user,
+                    $this->apiKey->exchange_id,
+                    $this->apiKey->id,
+                    $year,
+                    $month,
+                    $eventType,
+                )) {
                     $result['months_skipped']++;
                     $monthResult['events'][$eventType] = 'skipped';
                     continue;
