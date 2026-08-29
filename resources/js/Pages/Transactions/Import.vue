@@ -890,6 +890,10 @@ const importFromCSV = async () => {
   csvImporting.value = true
   
   const formData = new FormData()
+  const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content')
+  if (csrfToken) {
+    formData.append('_token', csrfToken)
+  }
   formData.append('file', csvForm.value.file)
   formData.append('format', csvForm.value.format)
   formData.append('skip_duplicates', csvForm.value.skip_duplicates ? '1' : '0')
@@ -931,6 +935,10 @@ const importFromCSV = async () => {
       onError: (errors) => {
         console.error('Import failed:', errors)
         const firstError = Object.values(errors || {})[0]
+        if (String(firstError || '').toLowerCase().includes('csrf token mismatch')) {
+          alert('Sua sessão foi renovada. Recarregue a página e tente importar novamente.')
+          return
+        }
         if (firstError) {
           alert(Array.isArray(firstError) ? firstError.join('\n') : String(firstError))
         } else {
