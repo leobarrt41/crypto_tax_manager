@@ -674,9 +674,18 @@ private function handleBinanceImport(Request $request): \Illuminate\Http\JsonRes
     $isBinanceExchangeImport = $source instanceof UserApiKey
         && strtolower((string) optional($source->exchange)->name) === 'binance';
 
-    if ($isBinanceExchangeImport && (!isset($validated['coverage_year'], $validated['coverage_month'], $validated['report_type']))) {
+    $isCurrentYearBinanceImport = $isBinanceExchangeImport
+        && (int) ($validated['coverage_year'] ?? 0) === now('America/Sao_Paulo')->year;
+
+    if ($isBinanceExchangeImport && (!isset($validated['coverage_year'], $validated['coverage_month']))) {
         return back()->withErrors([
-            'report_type' => 'Para relatórios Binance, informe a competência e o tipo de operação do arquivo.',
+            'coverage_year' => 'Para relatórios Binance, informe o ano e a competência inicial do arquivo.',
+        ]);
+    }
+
+    if ($isCurrentYearBinanceImport && !isset($validated['report_type'])) {
+        return back()->withErrors([
+            'report_type' => 'No ano corrente, selecione o tipo solicitado pela análise de cobertura.',
         ]);
     }
 
@@ -691,6 +700,8 @@ private function handleBinanceImport(Request $request): \Illuminate\Http\JsonRes
 
     /** @var array<int, true> $coveredMonths */
     $coveredMonths = [];
+    /** @var array<int, array<string, true>> $detectedReportTypesByMonth */
+    $detectedReportTypesByMonth = [];
 
     foreach ($rows as $rowIndex => $row) {
         $data = $this->combineImportedRow($headers, $row, $rowIndex + 2);
@@ -709,6 +720,17 @@ private function handleBinanceImport(Request $request): \Illuminate\Http\JsonRes
             $transactionDate = Carbon::parse($transactionData['date'], 'America/Sao_Paulo');
             if ($transactionDate->year === (int) $validated['coverage_year']) {
                 $coveredMonths[$transactionDate->month] = true;
+                $transactionType = strtolower((string) ($transactionData['type'] ?? ''));
+                $detectedReportType = match ($transactionType) {
+                    'trade' => 'spot_trade',
+                    'convert', 'swap' => 'convert',
+                    'deposit', 'receive' => 'deposit',
+                    'withdrawal', 'withdraw', 'send' => 'withdrawal',
+                    'earn', 'staking', 'reward', 'airdrop', 'mining' => 'earn_staking',
+                    'buy', 'sell', 'fiat_buy', 'fiat_sell' => 'fiat',
+                    default => 'other',
+                };
+                $detectedReportTypesByMonth[$transactionDate->month][$detectedReportType] = true;
             }
         }
 
@@ -731,15 +753,21 @@ private function handleBinanceImport(Request $request): \Illuminate\Http\JsonRes
         }
 
         foreach ($monthsToConfirm as $month) {
-            $coverageService->recordCsvCoverage(
-                $request->user(),
-                $source->exchange_id,
-                (int) $validated['coverage_year'],
-                (int) $month,
-                $validated['report_type'],
-                $recognizedRows,
-                $uploadedFile->getClientOriginalName(),
-            );
+            $reportTypesToConfirm = isset($validated['report_type'])
+                ? [$validated['report_type']]
+                : array_keys($detectedReportTypesByMonth[$month] ?? ['other' => true]);
+
+            foreach ($reportTypesToConfirm as $reportType) {
+                $coverageService->recordCsvCoverage(
+                    $request->user(),
+                    $source->exchange_id,
+                    (int) $validated['coverage_year'],
+                    (int) $month,
+                    $reportType,
+                    $recognizedRows,
+                    $uploadedFile->getClientOriginalName(),
+                );
+            }
         }
     }
 

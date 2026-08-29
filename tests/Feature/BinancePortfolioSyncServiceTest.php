@@ -22,6 +22,10 @@ class BinancePortfolioSyncServiceTest extends TestCase
     {
         parent::setUp();
 
+        if (!str_contains(strtolower((string) config('database.connections.pgsql.database')), 'test')) {
+            throw new \RuntimeException('Teste bloqueado: configure um banco PostgreSQL dedicado contendo "test" no nome.');
+        }
+
         foreach (['portfolio_snapshots', 'portfolios', 'wallet_balances', 'wallets', 'networks', 'user_api_keys', 'exchanges', 'crypto_assets', 'crypto_asset_prices', 'users'] as $table) {
             Schema::dropIfExists($table);
         }
@@ -224,5 +228,9 @@ class BinancePortfolioSyncServiceTest extends TestCase
         $this->assertEquals(5000.0, PortfolioSnapshot::query()->orderBy('snapshot_date')->first()->total_value_brl);
         $this->assertSame('official', PortfolioSnapshot::query()->first()->source);
         $this->assertSame('binance_account_snapshot', PortfolioSnapshot::query()->first()->data['source_detail']);
+        $dates = PortfolioSnapshot::query()->orderBy('snapshot_date')->get()
+            ->map(fn (PortfolioSnapshot $snapshot) => $snapshot->snapshot_date->timezone('America/Sao_Paulo')->toDateString())
+            ->all();
+        $this->assertSame(['2026-08-28', '2026-08-29'], $dates);
     }
 }

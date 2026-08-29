@@ -19,6 +19,10 @@ class PortfolioMetricsServiceTest extends TestCase
     {
         parent::setUp();
 
+        if (!str_contains(strtolower((string) config('database.connections.pgsql.database')), 'test')) {
+            throw new \RuntimeException('Teste bloqueado: configure um banco PostgreSQL dedicado contendo "test" no nome.');
+        }
+
         foreach ([
             'portfolio_snapshots', 'portfolios', 'fifo_opening_balances',
             'transactions', 'wallet_balances', 'wallets', 'crypto_assets', 'users',

@@ -28,6 +28,10 @@ class PortfolioHistoryReconstructionServiceTest extends TestCase
     {
         parent::setUp();
 
+        if (!str_contains(strtolower((string) config('database.connections.pgsql.database')), 'test')) {
+            throw new \RuntimeException('Teste bloqueado: configure um banco PostgreSQL dedicado contendo "test" no nome.');
+        }
+
         foreach ([
             'portfolio_snapshots', 'portfolios', 'transactions', 'wallet_balances', 'wallets',
             'networks', 'user_api_keys', 'crypto_asset_prices', 'crypto_assets', 'users',
@@ -235,6 +239,9 @@ class PortfolioHistoryReconstructionServiceTest extends TestCase
         $this->assertEquals(0.0, $snapshot->coverage_percentage);
         $this->assertSame(['UNKNOWN'], $snapshot->data['unpriced_assets']);
         $this->assertEquals(0.0, $snapshot->total_value_brl);
+
+        $history = app(PortfolioMetricsService::class)->history($this->user, 'all', $wallet->id);
+        $this->assertSame([], $history['data']);
     }
 
     public function test_keeps_official_and_local_snapshots_above_reconstructed_history(): void
@@ -306,6 +313,36 @@ class PortfolioHistoryReconstructionServiceTest extends TestCase
         $snapshot = $this->walletSnapshot($wallet, '2026-03-01');
         $this->assertSame([], $snapshot->data['negative_assets']);
         $this->assertSame(0, $snapshot->data['unassigned_transactions']);
+    }
+
+    public function test_legacy_empty_local_snapshot_does_not_override_reconstructed_value(): void
+    {
+        $wallet = $this->wallet('Carteira válida', 'wallet:legacy-empty');
+        $this->balance($wallet, 'BTC', 1);
+        $portfolio = Portfolio::query()->firstOrCreate(
+            ['user_id' => $this->user->id, 'name' => 'Portfolio Principal'],
+            ['is_active' => true],
+        );
+        $date = Carbon::parse('2026-03-01', 'America/Sao_Paulo')->endOfDay();
+
+        PortfolioSnapshot::query()->create([
+            'portfolio_id' => $portfolio->id,
+            'wallet_id' => null,
+            'snapshot_date' => $date,
+            'source' => 'local',
+            'reconstruction_status' => 'complete',
+            'coverage_percentage' => 100,
+            'total_value_brl' => 0,
+            'total_value_usd' => null,
+            'data' => ['assets' => []],
+        ]);
+
+        $this->reconstruct('2026-03-01', '2026-03-01');
+        $history = app(PortfolioMetricsService::class)->history($this->user, 'all');
+
+        $this->assertCount(1, $history['data']);
+        $this->assertSame('reconstructed', $history['data'][0]['source']);
+        $this->assertEquals(100.0, $history['data'][0]['value_brl']);
     }
 
     public function test_places_transactions_without_identified_source_in_a_separate_partial_wallet(): void

@@ -15,7 +15,7 @@ use Inertia\Response;
 
 class PortfolioController extends Controller
 {
-    private const PERIODS = ['24h', '7d', '30d', '90d', '1y', 'all'];
+    private const PERIODS = ['7d', '30d'];
 
     public function __construct(
         private readonly PortfolioMetricsService $metrics,

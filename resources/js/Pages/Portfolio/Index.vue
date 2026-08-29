@@ -246,11 +246,10 @@ const selectedWallet = ref(props.portfolio.wallet_id ?? null)
 const flashSuccess = computed(() => page.props.flash?.success || '')
 const flashError = computed(() => page.props.flash?.error || '')
 const periods = [
-  { value: '24h', label: '24 horas' }, { value: '7d', label: '7 dias' },
-  { value: '30d', label: '30 dias' }, { value: '90d', label: '90 dias' },
-  { value: '1y', label: '1 ano' }, { value: 'all', label: 'Tudo' },
+  { value: '7d', label: '7 dias' },
+  { value: '30d', label: '30 dias' },
 ]
-const chartPeriods = periods.filter((period) => period.value !== 'all')
+const chartPeriods = periods
 
 const chartPoints = computed(() => Array.isArray(props.portfolio.history?.data) ? props.portfolio.history.data : [])
 const reconstructionInProgress = computed(() => ['pending', 'processing', 'pricing'].includes(props.reconstructionSession?.status))

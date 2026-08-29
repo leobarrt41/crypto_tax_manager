@@ -166,9 +166,11 @@ class BinancePortfolioSyncService
                         continue;
                     }
 
-                    $date = Carbon::createFromTimestampMs($timestamp, 'UTC')
-                        ->timezone('America/Sao_Paulo')
-                        ->startOfDay();
+                    // updateTime representa a competência diária da Binance em
+                    // UTC. Converter o instante diretamente para São Paulo faria
+                    // 00:00 UTC cair artificialmente no dia anterior (21:00).
+                    $binanceDate = Carbon::createFromTimestampMs($timestamp, 'UTC')->toDateString();
+                    $date = Carbon::parse($binanceDate, 'America/Sao_Paulo')->endOfDay()->microsecond(0);
                     $btcPrice = $this->priceService->getOrCreatePrice('BTC', $date);
                     $btcPriceBrl = (float) ($btcPrice->price_brl ?? 0);
                     if ($btcPriceBrl <= 0) {

@@ -177,9 +177,11 @@ class PortfolioMetricsService
             )
             ->orderBy('snapshot_date')
             ->get()
+            ->reject(fn (PortfolioSnapshot $snapshot) => $this->isLegacyEmptySnapshot($snapshot))
+            ->reject(fn (PortfolioSnapshot $snapshot) => $this->isFullyUnpricedSnapshot($snapshot))
             ->groupBy(fn (PortfolioSnapshot $snapshot) => $snapshot->snapshot_date->timezone('America/Sao_Paulo')->toDateString())
             ->map(fn (Collection $items) => $items->sortByDesc(
-                fn (PortfolioSnapshot $snapshot) => $this->snapshotSourcePriority($this->resolvedSnapshotSource($snapshot))
+                fn (PortfolioSnapshot $snapshot) => $this->snapshotDisplayPriority($snapshot)
             )->first())
             ->values()
             // Snapshots vazios criados antes da primeira sincronização não
@@ -561,6 +563,36 @@ class PortfolioMetricsService
             'reconstructed' => 1,
             default => 0,
         };
+    }
+
+    private function snapshotDisplayPriority(PortfolioSnapshot $snapshot): int
+    {
+        // Versões anteriores criavam um snapshot local vazio antes da primeira
+        // sincronização. Quando há outro ponto real na mesma data, esse legado
+        // não pode vencer pela prioridade da fonte e simular liquidação total.
+        if ($this->isLegacyEmptySnapshot($snapshot)) {
+            return -1;
+        }
+
+        return $this->snapshotSourcePriority($this->resolvedSnapshotSource($snapshot));
+    }
+
+    private function isLegacyEmptySnapshot(PortfolioSnapshot $snapshot): bool
+    {
+        return $this->resolvedSnapshotSource($snapshot) === 'local'
+            && (float) $snapshot->total_value_brl <= 0
+            && empty(data_get($snapshot->data, 'assets', []))
+            && data_get($snapshot->data, 'coverage_basis') === null;
+    }
+
+    private function isFullyUnpricedSnapshot(PortfolioSnapshot $snapshot): bool
+    {
+        // Total zero com cobertura zero significa “nenhum preço encontrado”,
+        // não liquidação. Uma liquidação verdadeira possui cobertura válida e
+        // deve continuar visível no gráfico como R$ 0,00.
+        return ($snapshot->reconstruction_status ?? 'complete') === 'partial'
+            && (float) ($snapshot->coverage_percentage ?? 100) <= 0
+            && (float) $snapshot->total_value_brl <= 0;
     }
 
     private function diversificationScore(Collection $allocations): ?float

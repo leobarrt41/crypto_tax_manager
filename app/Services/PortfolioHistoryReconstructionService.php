@@ -380,6 +380,7 @@ class PortfolioHistoryReconstructionService
             ->where('source', 'local')
             ->whereBetween('snapshot_date', [$from, $to])
             ->get()
+            ->reject(fn (PortfolioSnapshot $snapshot) => $this->isLegacyEmptySnapshot($snapshot))
             ->mapWithKeys(fn (PortfolioSnapshot $snapshot) => [
                 $snapshot->snapshot_date->timezone(self::TIMEZONE)->toDateString() => true,
             ]);
@@ -442,6 +443,13 @@ class PortfolioHistoryReconstructionService
         }
 
         return $written;
+    }
+
+    private function isLegacyEmptySnapshot(PortfolioSnapshot $snapshot): bool
+    {
+        return (float) $snapshot->total_value_brl <= 0
+            && empty(data_get($snapshot->data, 'assets', []))
+            && data_get($snapshot->data, 'coverage_basis') === null;
     }
 
     private function sourcePriority(?string $source): int

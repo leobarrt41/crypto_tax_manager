@@ -364,17 +364,22 @@
                     <div>
                       <label class="block text-sm font-medium text-gray-700">Tipo de operação</label>
                       <select v-model="csvForm.report_type" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm sm:text-sm">
-                        <option value="">Selecione</option>
+                        <option value="">{{ isHistoricalCsvYear ? 'Todas — detectar automaticamente' : 'Selecione' }}</option>
                         <option v-for="type in csvRequestedReportTypes" :key="type.value" :value="type.value">{{ type.label }}</option>
                       </select>
                     </div>
                     <p class="sm:col-span-3 text-xs text-blue-700">
-                      São exibidos os tipos solicitados após a análise da cobertura automática. Em caso de falha da API, o CSV pode ser registrado manualmente como contingência. Essas informações não alteram as transações do arquivo. Para CSVs Binance de até três meses, o sistema confirma automaticamente todas as competências identificadas nas linhas importadas.
+                      <template v-if="isHistoricalCsvYear">
+                        Para anos anteriores, o documento completo pode ser importado diretamente, sem exigir uma sincronização anual prévia. O sistema confirma automaticamente as competências identificadas nas linhas do arquivo.
+                      </template>
+                      <template v-else>
+                        No ano corrente, são exibidos os tipos solicitados após a análise da cobertura automática. Em caso de falha da API, o CSV pode ser registrado manualmente como contingência. Para CSVs Binance de até três meses, o sistema confirma automaticamente todas as competências identificadas nas linhas importadas.
+                      </template>
                     </p>
                   </div>
 
                   <p v-else-if="isBinanceCsvSource" class="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
-                    Primeiro execute a sincronização anual da Binance e atualize a cobertura. O sistema indicará quais CSVs deste ano ainda precisam ser importados.
+                    Para importar documentos do ano corrente, primeiro execute a sincronização anual da Binance e atualize a cobertura. Anos anteriores podem ser importados diretamente.
                   </p>
 
                   <div v-if="csvForm.source_type === 'wallet'" class="mb-4">
@@ -594,8 +599,13 @@ const isBinanceExchange = computed(() => exchangeForm.value.exchange.toLowerCase
 const selectedExchangeKeys = computed(() => availableKeys.value.filter(key => key.exchange.toLowerCase() === exchangeForm.value.exchange.toLowerCase()))
 const selectedCsvKey = computed(() => props.userApiKeys.find(key => Number(key.id) === Number(csvForm.value.source_id)))
 const isBinanceCsvSource = computed(() => csvForm.value.source_type === 'exchange' && selectedCsvKey.value?.exchange?.name?.toLowerCase() === 'binance')
-const csvCoverageFormVisible = computed(() => isBinanceCsvSource.value && Boolean(coverage.value || coverageError.value))
+const isHistoricalCsvYear = computed(() => Number(csvForm.value.coverage_year) < currentYear)
+const csvCoverageFormVisible = computed(() => isBinanceCsvSource.value)
 const csvRequestedReportTypes = computed(() => {
+  if (isHistoricalCsvYear.value) {
+    return reportTypes
+  }
+
   if (!coverage.value) {
     return coverageError.value ? reportTypes : []
   }
@@ -659,7 +669,9 @@ const syncStatusMessage = computed(() => {
 const canSubmitFileImport = computed(() => {
   const hasBaseFields = Boolean(csvForm.value.file && csvForm.value.source_type && csvForm.value.source_id)
   const hasBinanceCoverageFields = !isBinanceCsvSource.value || Boolean(
-    csvForm.value.coverage_year && csvForm.value.coverage_month && csvForm.value.report_type
+    csvForm.value.coverage_year
+    && csvForm.value.coverage_month
+    && (isHistoricalCsvYear.value || csvForm.value.report_type)
   )
 
   return hasBaseFields && hasBinanceCoverageFields
