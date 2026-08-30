@@ -53,6 +53,11 @@ class TradingStrategy extends Model
         return $this->hasMany(TradingLog::class);
     }
 
+    public function backtestRuns(): HasMany
+    {
+        return $this->hasMany(BacktestRun::class);
+    }
+
     public function scopeNotArchived($query)
     {
         return $query->whereNull('archived_at');

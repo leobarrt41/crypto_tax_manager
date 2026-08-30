@@ -17,6 +17,7 @@ use App\Http\Controllers\PortfolioController;
 use App\Http\Controllers\NotificationController;
 use App\Http\Controllers\TradingBotController;
 use App\Http\Controllers\StrategyDefinitionController;
+use App\Http\Controllers\BacktestController;
 use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
@@ -154,6 +155,12 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::post('/{strategy}/validate', [StrategyDefinitionController::class, 'validateDefinition'])->name('validate-owned');
             Route::post('/{strategy}/archive', [StrategyDefinitionController::class, 'archive'])->name('archive');
             Route::post('/{strategy}/preview', [StrategyDefinitionController::class, 'preview'])->name('preview');
+        });
+        Route::prefix('backtests')->name('backtests.')->group(function () {
+            Route::get('/', [BacktestController::class, 'index'])->name('index');
+            Route::get('/create', [BacktestController::class, 'create'])->name('create');
+            Route::post('/', [BacktestController::class, 'store'])->name('store');
+            Route::get('/{backtest}', [BacktestController::class, 'show'])->name('show');
         });
     });
 

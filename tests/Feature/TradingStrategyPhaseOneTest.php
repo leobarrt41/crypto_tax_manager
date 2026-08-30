@@ -346,14 +346,19 @@ class TradingStrategyPhaseOneTest extends TestCase
         );
     }
 
-    public function test_only_non_operational_strategy_routes_are_active(): void
+    public function test_only_safe_non_execution_trading_routes_are_active(): void
     {
-        $forbidden = collect(Route::getRoutes())->filter(function ($route): bool {
+        $allowedBacktestUris = [
+            'trading-bot/backtests',
+            'trading-bot/backtests/create',
+            'trading-bot/backtests/{backtest}',
+        ];
+        $forbidden = collect(Route::getRoutes())->filter(function ($route) use ($allowedBacktestUris): bool {
             $uri = strtolower($route->uri());
 
             return str_contains($uri, 'trading-bot/start')
                 || str_contains($uri, 'trading-bot/stop')
-                || str_contains($uri, 'backtest')
+                || (str_contains($uri, 'backtest') && ! in_array($uri, $allowedBacktestUris, true))
                 || str_contains($uri, 'order-update')
                 || (str_contains($uri, 'order') && (bool) preg_match('#/(create|store|cancel|retry|update)$#', $uri));
         });

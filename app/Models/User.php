@@ -125,6 +125,11 @@ class User extends Authenticatable
         return $this->hasMany(TradingStrategyVersion::class, 'created_by');
     }
 
+    public function backtestRuns(): HasMany
+    {
+        return $this->hasMany(BacktestRun::class);
+    }
+
     public function exchangeKeys()
 {
     return $this->hasMany(UserApiKey::class);
