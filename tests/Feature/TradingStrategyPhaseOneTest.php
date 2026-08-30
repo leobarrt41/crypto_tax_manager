@@ -180,13 +180,23 @@ class TradingStrategyPhaseOneTest extends TestCase
 
     public function test_production_strategy_mutations_require_csrf_for_an_authenticated_owner(): void
     {
-        $owner = User::factory()->create();
+        // Alguns ambientes de Feature Test podem desabilitar middleware globalmente.
+        // Este cenário exige a pilha real para provar o bloqueio CSRF em produção.
+        $this->withMiddleware();
+
+        $owner = User::factory()->create([
+            'email_verified_at' => now(),
+        ]);
         $strategy = app(StrategyVersionService::class)->createStrategy($owner, 'CSRF', null, $this->definition());
+        $currentVersionId = $strategy->current_version_id;
 
         $this->actingAs($owner)->patch(route('trading-bot.strategies.update', $strategy), [
             'name' => 'Sem token CSRF',
             'definition' => $this->definition(),
         ])->assertStatus(419);
+
+        $this->assertSame('CSRF', $strategy->fresh()->name);
+        $this->assertSame($currentVersionId, $strategy->fresh()->current_version_id);
     }
 
     public function test_other_user_cannot_view_edit_validate_preview_update_or_archive_strategy(): void
