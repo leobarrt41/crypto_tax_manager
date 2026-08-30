@@ -180,9 +180,18 @@ class TradingStrategyPhaseOneTest extends TestCase
 
     public function test_production_strategy_mutations_require_csrf_for_an_authenticated_owner(): void
     {
-        // Alguns ambientes de Feature Test podem desabilitar middleware globalmente.
-        // Este cenário exige a pilha real para provar o bloqueio CSRF em produção.
+        // withMiddleware() remove apenas o desligamento global. O middleware CSRF
+        // padrão do Laravel também ignora requisições durante unit tests; esta instância
+        // local ao teste preserva a pilha web e força a verificação do token ausente.
         $this->withMiddleware();
+        $this->app->bind(\App\Http\Middleware\VerifyCsrfToken::class, function ($app) {
+            return new class($app, $app->make(\Illuminate\Contracts\Encryption\Encrypter::class)) extends \App\Http\Middleware\VerifyCsrfToken {
+                protected function runningUnitTests(): bool
+                {
+                    return false;
+                }
+            };
+        });
 
         $owner = User::factory()->create([
             'email_verified_at' => now(),
