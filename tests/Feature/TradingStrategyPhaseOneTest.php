@@ -158,6 +158,37 @@ class TradingStrategyPhaseOneTest extends TestCase
         $service->createNewVersion($strategy->fresh(), $user, 'Bloqueada', null, $this->definition());
     }
 
+    public function test_guest_is_redirected_and_owner_can_access_protected_strategy_pages(): void
+    {
+        // Neste cenário, o CSRF é removido somente para comprovar que o guest é bloqueado por auth.
+        // A proteção CSRF real é validada separadamente no teste seguinte.
+        $this->withoutMiddleware(\App\Http\Middleware\VerifyCsrfToken::class);
+
+        $owner = User::factory()->create();
+        $strategy = app(StrategyVersionService::class)->createStrategy($owner, 'Protegida', null, $this->definition());
+
+        $this->get(route('trading-bot.index'))->assertRedirect(route('login'));
+        $this->get(route('trading-bot.strategies.create'))->assertRedirect(route('login'));
+        $this->post(route('trading-bot.strategies.store'), [
+            'name' => 'Tentativa visitante',
+            'definition' => $this->definition(),
+        ])->assertRedirect(route('login'));
+
+        $this->actingAs($owner)->get(route('trading-bot.index'))->assertOk();
+        $this->actingAs($owner)->get(route('trading-bot.strategies.show', $strategy))->assertOk();
+    }
+
+    public function test_production_strategy_mutations_require_csrf_for_an_authenticated_owner(): void
+    {
+        $owner = User::factory()->create();
+        $strategy = app(StrategyVersionService::class)->createStrategy($owner, 'CSRF', null, $this->definition());
+
+        $this->actingAs($owner)->patch(route('trading-bot.strategies.update', $strategy), [
+            'name' => 'Sem token CSRF',
+            'definition' => $this->definition(),
+        ])->assertStatus(419);
+    }
+
     public function test_other_user_cannot_view_edit_validate_preview_update_or_archive_strategy(): void
     {
         $this->withoutMiddleware(\App\Http\Middleware\VerifyCsrfToken::class);

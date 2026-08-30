@@ -138,7 +138,10 @@ Route::middleware(['auth', 'verified'])->group(function () {
     });
 
     // ===== TRADING BOT — FASE 1: ESTRATÉGIAS, SEM EXECUÇÃO =====
-    Route::prefix('trading-bot')->name('trading-bot.')->group(function () {
+    Route::middleware(['auth', 'verified'])
+        ->prefix('trading-bot')
+        ->name('trading-bot.')
+        ->group(function () {
         Route::get('/', [StrategyDefinitionController::class, 'index'])->name('index');
         Route::prefix('strategies')->name('strategies.')->group(function () {
             Route::get('/', [StrategyDefinitionController::class, 'index'])->name('index');
