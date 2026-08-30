@@ -160,6 +160,8 @@ class TradingStrategyPhaseOneTest extends TestCase
 
     public function test_other_user_cannot_view_edit_validate_preview_update_or_archive_strategy(): void
     {
+        $this->withoutMiddleware(\App\Http\Middleware\VerifyCsrfToken::class);
+
         $owner = User::factory()->create();
         $intruder = User::factory()->create();
         $strategy = app(StrategyVersionService::class)->createStrategy($owner, 'Privada', null, $this->definition());
@@ -242,6 +244,8 @@ class TradingStrategyPhaseOneTest extends TestCase
 
     public function test_insufficient_data_and_preview_have_no_operational_side_effects_or_http(): void
     {
+        $this->withoutMiddleware(\App\Http\Middleware\VerifyCsrfToken::class);
+
         Http::fake();
         Queue::fake();
         $user = User::factory()->create();
