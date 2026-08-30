@@ -11,6 +11,20 @@ return new class extends Migration
 {
     public function up(): void
     {
+        // O payload produzido por Crypt::encryptString pode exceder 255 caracteres.
+        // SQL explícito evita exigir doctrine/dbal apenas para alterar o tipo.
+        match (DB::getDriverName()) {
+            'pgsql' => [
+                DB::statement('ALTER TABLE user_api_keys ALTER COLUMN api_key TYPE TEXT'),
+                DB::statement('ALTER TABLE user_api_keys ALTER COLUMN secret_key TYPE TEXT'),
+            ],
+            'mysql', 'mariadb' => [
+                DB::statement('ALTER TABLE user_api_keys MODIFY api_key TEXT NOT NULL'),
+                DB::statement('ALTER TABLE user_api_keys MODIFY secret_key TEXT NOT NULL'),
+            ],
+            default => null,
+        };
+
         Schema::table('user_api_keys', function (Blueprint $table) {
             $table->boolean('read_enabled')->default(true)->after('secret_key');
             $table->boolean('trading_enabled')->default(false)->after('read_enabled');
