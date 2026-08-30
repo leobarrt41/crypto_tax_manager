@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\TradingStrategy;
+use App\Models\TradingStrategyVersion;
 use App\Services\StrategyDefinitionValidator;
 use App\Services\StrategySignalEvaluator;
 use App\Services\StrategyVersionService;
@@ -21,6 +22,23 @@ class StrategyDefinitionController extends Controller
         private readonly StrategySignalEvaluator $signalEvaluator,
         private readonly TradingAuditLogger $auditLogger,
     ) {
+    }
+
+    public function overview(Request $request): Response
+    {
+        $strategies = $request->user()->tradingStrategies();
+        $latestStrategy = (clone $strategies)->latest('updated_at')->first(['id', 'updated_at']);
+
+        return Inertia::render('TradingBot/Overview', [
+            'summary' => [
+                'strategies_count' => (clone $strategies)->count(),
+                'versions_count' => TradingStrategyVersion::query()
+                    ->whereHas('strategy', fn ($query) => $query->where('user_id', $request->user()->id))
+                    ->count(),
+                'last_updated_at' => $latestStrategy?->updated_at?->toIso8601String(),
+            ],
+            'executionEnabled' => false,
+        ]);
     }
 
     public function index(Request $request): Response

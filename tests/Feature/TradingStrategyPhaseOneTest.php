@@ -178,6 +178,24 @@ class TradingStrategyPhaseOneTest extends TestCase
         $this->actingAs($owner)->get(route('trading-bot.strategies.show', $strategy))->assertOk();
     }
 
+    public function test_trading_bot_overview_is_distinct_from_strategy_listing_and_uses_local_summary(): void
+    {
+        $user = User::factory()->create();
+        app(StrategyVersionService::class)->createStrategy($user, 'Resumo local', null, $this->definition());
+
+        $this->actingAs($user)->get(route('trading-bot.index'))
+            ->assertOk()
+            ->assertSee('TradingBot\\/Overview', false)
+            ->assertSee('&quot;strategies_count&quot;:1', false)
+            ->assertSee('&quot;versions_count&quot;:1', false)
+            ->assertSee('&quot;executionEnabled&quot;:false', false);
+
+        $this->actingAs($user)->get(route('trading-bot.strategies.index'))
+            ->assertOk()
+            ->assertSee('TradingBot\\/Strategies\\/Index', false)
+            ->assertDontSee('TradingBot\\/Overview', false);
+    }
+
     public function test_production_strategy_mutations_require_csrf_for_an_authenticated_owner(): void
     {
         // withMiddleware() remove apenas o desligamento global. O middleware CSRF

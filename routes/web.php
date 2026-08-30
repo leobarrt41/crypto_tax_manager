@@ -142,7 +142,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
         ->prefix('trading-bot')
         ->name('trading-bot.')
         ->group(function () {
-        Route::get('/', [StrategyDefinitionController::class, 'index'])->name('index');
+        Route::get('/', [StrategyDefinitionController::class, 'overview'])->name('index');
         Route::prefix('strategies')->name('strategies.')->group(function () {
             Route::get('/', [StrategyDefinitionController::class, 'index'])->name('index');
             Route::get('/create', [StrategyDefinitionController::class, 'create'])->name('create');
