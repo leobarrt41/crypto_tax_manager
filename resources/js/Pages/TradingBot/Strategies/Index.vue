@@ -5,13 +5,13 @@
         <section class="rounded-xl border border-amber-200 bg-amber-50 p-5 text-amber-950">
           <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <h1 class="text-2xl font-bold">Estratégias para backtesting</h1>
+              <h1 class="text-2xl font-bold">Estratégias reutilizáveis</h1>
               <p class="mt-1 text-sm leading-6">
-                Nesta fase, as estratégias apenas descrevem regras reutilizáveis. Nenhuma ordem é criada, nenhum worker é iniciado e nenhuma chamada privada é feita à exchange.
+                Crie regras versionadas para uso futuro em backtests e operações paper. Nesta fase, nenhuma operação é iniciada, nenhuma ordem é criada e nenhuma chamada privada é feita à exchange.
               </p>
             </div>
             <span class="inline-flex w-fit rounded-full bg-amber-200 px-3 py-1 text-xs font-semibold text-amber-900">
-              Execução real bloqueada
+              Somente definição e prévia
             </span>
           </div>
         </section>
@@ -20,7 +20,7 @@
           <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h2 class="text-xl font-semibold text-slate-900">Minhas estratégias</h2>
-              <p class="mt-1 text-sm text-slate-600">Cada edição cria uma versão imutável para auditoria e backtesting futuro.</p>
+              <p class="mt-1 text-sm text-slate-600">Cada edição cria uma versão imutável que poderá ser selecionada por diferentes backtests e operações futuras.</p>
             </div>
             <Link
               :href="route('trading-bot.strategies.create')"
@@ -32,7 +32,7 @@
 
           <div v-if="strategies.length === 0" class="mt-8 rounded-lg border border-dashed border-slate-300 px-6 py-12 text-center">
             <h3 class="text-base font-semibold text-slate-900">Nenhuma estratégia cadastrada</h3>
-            <p class="mt-2 text-sm text-slate-600">Crie uma regra com indicadores para utilizá-la no backtesting da próxima fase.</p>
+            <p class="mt-2 text-sm text-slate-600">Crie uma regra com indicadores para reutilizá-la em backtests e, futuramente, em operações paper.</p>
           </div>
 
           <div v-else class="mt-6 overflow-hidden rounded-lg border border-slate-200">
@@ -50,6 +50,7 @@
                   <td class="px-4 py-4">
                     <p class="font-semibold text-slate-900">{{ strategy.name }}</p>
                     <p class="mt-1 max-w-xl text-sm text-slate-600">{{ strategy.description || 'Sem descrição.' }}</p>
+                    <p class="mt-1 text-xs text-slate-500">Atualizada em {{ formatDate(strategy.updated_at) }}</p>
                   </td>
                   <td class="px-4 py-4 text-sm text-slate-700">
                     v{{ strategy.current_version?.version || '—' }}
@@ -59,7 +60,7 @@
                     <span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">
                       {{ statusLabel(strategy.current_version?.status) }}
                     </span>
-                    <span class="mt-1 block text-xs text-slate-500">Somente para backtesting</span>
+                    <span class="mt-1 block text-xs text-slate-500">Reutilizável em contextos futuros</span>
                   </td>
                   <td class="px-4 py-4 text-right">
                     <Link :href="route('trading-bot.strategies.show', strategy.id)" class="text-sm font-semibold text-indigo-700 hover:text-indigo-900">
@@ -90,4 +91,8 @@ const statusLabel = (status) => ({
   validated: 'Validada',
   archived: 'Arquivada',
 }[status] || 'Sem versão')
+
+const formatDate = (value) => value
+  ? new Intl.DateTimeFormat('pt-BR', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
+  : '—'
 </script>

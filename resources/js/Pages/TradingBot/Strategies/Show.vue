@@ -15,8 +15,9 @@
         </div>
 
         <section class="rounded-xl border border-amber-200 bg-amber-50 p-5 text-amber-950">
-          <h2 class="font-semibold">Pronta apenas para backtesting futuro</h2>
-          <p class="mt-1 text-sm">Esta tela não possui par, exchange, timeframe ou lado operacional. Nenhum sinal é monitorado e nenhuma ordem é criada nesta fase.</p>
+          <h2 class="font-semibold">Versão reutilizável da estratégia</h2>
+          <p class="mt-1 text-sm">Esta versão poderá ser selecionada em diferentes backtests e, futuramente, em operações paper. Nesta fase, não há uso de exchange ou chave de API, monitoramento contínuo, bot ativo ou envio de ordens.</p>
+          <p class="mt-2 text-xs">Operações paper estarão disponíveis em uma fase futura.</p>
         </section>
 
         <section class="rounded-xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
