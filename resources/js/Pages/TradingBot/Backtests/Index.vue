@@ -46,7 +46,14 @@
                   <td class="px-4 py-4 text-sm text-slate-700">{{ formatPeriod(backtest.requested_start_at, backtest.requested_end_at) }}</td>
                   <td class="px-4 py-4 text-right text-sm font-semibold" :class="netReturnClass(backtest.metrics?.net_return)">{{ formatNumber(backtest.metrics?.net_return) }}</td>
                   <td class="px-4 py-4"><span class="rounded-full px-2.5 py-1 text-xs font-semibold" :class="statusClass(backtest.status)">{{ statusLabel(backtest.status) }}</span></td>
-                  <td class="px-4 py-4 text-right"><Link :href="route('trading-bot.backtests.show', backtest.id)" class="text-sm font-semibold text-indigo-700 hover:text-indigo-900">Ver resultado</Link></td>
+                  <td class="px-4 py-4 text-right">
+                    <div class="inline-flex items-center gap-3">
+                      <Link :href="route('trading-bot.backtests.show', backtest.id)" class="text-sm font-semibold text-indigo-700 hover:text-indigo-900">Ver resultado</Link>
+                      <button type="button" class="text-sm font-semibold text-rose-600 hover:text-rose-800 disabled:cursor-not-allowed disabled:opacity-50" :disabled="deletingId === backtest.id" @click="destroy(backtest)">
+                        {{ deletingId === backtest.id ? 'Excluindo…' : 'Excluir' }}
+                      </button>
+                    </div>
+                  </td>
                 </tr>
               </tbody>
             </table>
@@ -58,7 +65,8 @@
 </template>
 
 <script setup>
-import { Link } from '@inertiajs/vue3'
+import { ref } from 'vue'
+import { Link, router } from '@inertiajs/vue3'
 import AppLayout from '@/Layouts/AppLayout.vue'
 
 defineProps({
@@ -78,4 +86,16 @@ const formatPeriod = (start, end) => `${formatDate(start)} a ${formatDate(end)}`
 const netReturnClass = (value) => Number(value || 0) >= 0 ? 'text-emerald-700' : 'text-rose-700'
 const statusLabel = (status) => ({ completed: 'Concluído', invalid_data: 'Dados insuficientes', failed: 'Falhou' }[status] || status)
 const statusClass = (status) => ({ completed: 'bg-emerald-100 text-emerald-800', invalid_data: 'bg-amber-100 text-amber-900', failed: 'bg-rose-100 text-rose-800' }[status] || 'bg-slate-100 text-slate-700')
+
+const deletingId = ref(null)
+const destroy = (backtest) => {
+  const strategy = backtest.strategy?.name || 'esta estratégia'
+  if (!window.confirm(`Excluir definitivamente este backtest de ${strategy}? As operações simuladas vinculadas também serão removidas.`)) return
+
+  deletingId.value = backtest.id
+  router.delete(route('trading-bot.backtests.destroy', backtest.id), {
+    preserveScroll: true,
+    onFinish: () => { deletingId.value = null },
+  })
+}
 </script>

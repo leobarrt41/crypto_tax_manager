@@ -7,9 +7,11 @@ use App\Models\Exchange;
 use App\Models\TradingStrategyVersion;
 use App\Services\BacktestRunService;
 use App\Services\MarketCandleIngestionService;
+use App\Services\TradingAuditLogger;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -18,6 +20,7 @@ class BacktestController extends Controller
     public function __construct(
         private readonly MarketCandleIngestionService $marketData,
         private readonly BacktestRunService $backtests,
+        private readonly TradingAuditLogger $audit,
     ) {
     }
 
@@ -140,5 +143,35 @@ class BacktestController extends Controller
             'backtest' => $backtest,
             'executionEnabled' => false,
         ]);
+    }
+
+    public function destroy(Request $request, BacktestRun $backtest): RedirectResponse
+    {
+        $this->authorize('delete', $backtest);
+
+        DB::transaction(function () use ($request, $backtest): void {
+            $this->audit->record(
+                $request->user()->id,
+                'backtest_deleted',
+                'Resultado histórico de backtest excluído pelo usuário.',
+                'info',
+                $backtest->trading_strategy_id,
+                [
+                    'backtest_run_id' => $backtest->id,
+                    'strategy_version_id' => $backtest->trading_strategy_version_id,
+                    'strategy_definition_hash' => $backtest->strategy_definition_hash,
+                    'dataset_hash' => $backtest->dataset_hash,
+                    'symbol' => $backtest->symbol,
+                    'timeframe' => $backtest->timeframe,
+                    'status' => $backtest->status,
+                ],
+                'backtest',
+            );
+
+            $backtest->delete();
+        });
+
+        return redirect()->route('trading-bot.backtests.index')
+            ->with('success', 'Backtest excluído. O evento de exclusão foi registrado na auditoria.');
     }
 }

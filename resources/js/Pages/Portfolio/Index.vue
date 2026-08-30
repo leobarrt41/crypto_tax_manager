@@ -93,8 +93,8 @@
                 </div>
               </div>
               <div class="px-6 py-4">
-                <div v-if="chartPoints.length >= 2" class="h-64">
-                  <svg viewBox="0 0 760 250" preserveAspectRatio="none" class="w-full h-full" role="img" aria-label="Evolução real do valor do Portfólio">
+                <div v-if="chartPoints.length >= 2">
+                  <svg viewBox="0 0 760 250" preserveAspectRatio="none" class="h-64 w-full" role="img" aria-label="Evolução real do valor do Portfólio">
                     <defs>
                       <linearGradient id="portfolioFill" x1="0" x2="0" y1="0" y2="1">
                         <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.24" />
@@ -108,7 +108,7 @@
                     <span>{{ chartStartLabel }}</span>
                     <span>{{ chartEndLabel }}</span>
                   </div>
-                  <p v-if="historyCoverageMessage" class="mt-3 text-xs text-amber-700">{{ historyCoverageMessage }}</p>
+                  <p v-if="historyCoverageMessage" class="mt-3 rounded-md bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800 dark:bg-amber-400/10 dark:text-amber-300">{{ historyCoverageMessage }}</p>
                   <div class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-600">
                     <span v-for="source in historySources" :key="source.key"><strong>{{ source.label }}:</strong> {{ source.count }} ponto(s)</span>
                   </div>

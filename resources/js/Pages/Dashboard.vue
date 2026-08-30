@@ -44,8 +44,8 @@
           />
           
         <!-- Card IN 1888 customizado (evita NaN e exibe link para status anual) -->
-        <div class="bg-white shadow rounded-lg p-4">
-          <div class="flex items-center">
+        <div class="rounded-xl bg-white p-5 shadow-sm ring-1 ring-gray-200">
+          <div class="flex items-start">
             <div class="flex-shrink-0">
               <div class="w-8 h-8 rounded-md flex items-center justify-center"
                    :class="in1888CardColor">
@@ -55,17 +55,17 @@
                 </svg>
               </div>
             </div>
-            <div class="ml-5 w-0 flex-1">
+            <div class="ml-4 min-w-0 flex-1">
               <dl>
-                <dt class="text-sm font-medium text-gray-500 truncate">Status {{ in1888ObligationName }}</dt>
-                <dd class="text-2xl font-semibold text-gray-900">
+                <dt class="text-sm font-semibold text-gray-600">Status {{ in1888ObligationName }}</dt>
+                <dd class="mt-2 text-xl font-bold leading-tight text-gray-900">
                   {{ in1888StatusLabel }}
                 </dd>
-                <dt class="text-xs text-gray-400 mt-1">
+                <dt class="mt-2 text-sm leading-5 text-gray-600">
                   {{ in1888Description }}
                 </dt>
-                <dt class="mt-2">
-                  <Link :href="route('tax-reports.in1888')" class="text-xs text-blue-600 hover:underline">
+                <dt class="mt-4">
+                  <Link :href="route('tax-reports.in1888')" class="text-sm font-semibold text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300">
                     Ver status anual mês a mês →
                   </Link>
                 </dt>

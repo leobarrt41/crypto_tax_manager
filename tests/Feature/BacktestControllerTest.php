@@ -86,6 +86,36 @@ class BacktestControllerTest extends TestCase
         $this->actingAs($other)->get(route('trading-bot.backtests.show', $run))->assertForbidden();
     }
 
+    public function test_owner_can_delete_backtest_with_trades_and_an_audit_record_is_preserved(): void
+    {
+        $this->withoutMiddleware(\App\Http\Middleware\VerifyCsrfToken::class);
+        $this->actingAs($this->owner)->post(route('trading-bot.backtests.store'), $this->payload());
+        $run = BacktestRun::query()->sole();
+
+        $response = $this->actingAs($this->owner)->delete(route('trading-bot.backtests.destroy', $run));
+
+        $response->assertRedirect(route('trading-bot.backtests.index'));
+        $response->assertSessionHas('success');
+        $this->assertDatabaseMissing('backtest_runs', ['id' => $run->id]);
+        $this->assertDatabaseCount('backtest_trades', 0);
+        $this->assertDatabaseHas('trading_logs', [
+            'user_id' => $this->owner->id,
+            'event_type' => 'backtest_deleted',
+            'source' => 'backtest',
+        ]);
+    }
+
+    public function test_user_cannot_delete_another_users_backtest(): void
+    {
+        $this->withoutMiddleware(\App\Http\Middleware\VerifyCsrfToken::class);
+        $this->actingAs($this->owner)->post(route('trading-bot.backtests.store'), $this->payload());
+        $run = BacktestRun::query()->sole();
+        $other = User::factory()->create(['email_verified_at' => now()]);
+
+        $this->actingAs($other)->delete(route('trading-bot.backtests.destroy', $run))->assertForbidden();
+        $this->assertDatabaseHas('backtest_runs', ['id' => $run->id]);
+    }
+
     public function test_backtest_creation_requires_csrf_for_verified_user(): void
     {
         $this->withMiddleware();

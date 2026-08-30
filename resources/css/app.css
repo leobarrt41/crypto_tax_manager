@@ -118,3 +118,53 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Compatibilidade de tema para as telas legadas que ainda usam cores Tailwind fixas. */
+@layer utilities {
+  .dark .bg-white { background-color: #111827; }
+  .dark .bg-gray-50, .dark .bg-slate-50 { background-color: #0f172a; }
+  .dark .bg-gray-100, .dark .bg-slate-100 { background-color: #1e293b; }
+  .dark .bg-gray-200, .dark .bg-slate-200 { background-color: #334155; }
+
+  .dark .text-gray-900, .dark .text-slate-900,
+  .dark .text-gray-800, .dark .text-slate-800 { color: #f8fafc; }
+  .dark .text-gray-700, .dark .text-slate-700 { color: #e2e8f0; }
+  .dark .text-gray-600, .dark .text-slate-600 { color: #cbd5e1; }
+  .dark .text-gray-500, .dark .text-slate-500 { color: #94a3b8; }
+  .dark .text-gray-400, .dark .text-slate-400 { color: #64748b; }
+
+  .dark .border-gray-100, .dark .border-slate-100,
+  .dark .border-gray-200, .dark .border-slate-200,
+  .dark .border-gray-300, .dark .border-slate-300 { border-color: #334155; }
+  .dark .divide-gray-100 > :not(:last-child), .dark .divide-slate-100 > :not(:last-child),
+  .dark .divide-gray-200 > :not(:last-child), .dark .divide-slate-200 > :not(:last-child) { border-color: #334155; }
+  .dark .ring-gray-200, .dark .ring-slate-200 { --tw-ring-color: #334155; }
+
+  .dark input, .dark select, .dark textarea {
+    border-color: #475569;
+    background-color: #0f172a;
+    color: #f8fafc;
+  }
+  .dark input::placeholder, .dark textarea::placeholder { color: #64748b; }
+  .dark option { background-color: #0f172a; color: #f8fafc; }
+
+  .dark .hover\:bg-gray-50:hover, .dark .hover\:bg-slate-50:hover,
+  .dark .hover\:bg-gray-100:hover, .dark .hover\:bg-slate-100:hover { background-color: #1e293b; }
+  .dark .hover\:text-gray-900:hover, .dark .hover\:text-slate-900:hover { color: #ffffff; }
+
+  .dark .bg-sky-50 { background-color: #082f49; }
+  .dark .border-sky-200 { border-color: #075985; }
+  .dark .text-sky-950 { color: #e0f2fe; }
+  .dark .bg-indigo-50 { background-color: #1e1b4b; }
+  .dark .border-indigo-200 { border-color: #4338ca; }
+  .dark .text-indigo-950 { color: #e0e7ff; }
+  .dark .bg-emerald-50 { background-color: #022c22; }
+  .dark .border-emerald-200 { border-color: #047857; }
+  .dark .text-emerald-950 { color: #d1fae5; }
+  .dark .bg-amber-50 { background-color: #451a03; }
+  .dark .border-amber-200 { border-color: #b45309; }
+  .dark .text-amber-950 { color: #fef3c7; }
+  .dark .bg-rose-50, .dark .bg-red-50 { background-color: #4c0519; }
+  .dark .border-rose-200, .dark .border-red-200 { border-color: #be123c; }
+  .dark .text-rose-950, .dark .text-red-950 { color: #ffe4e6; }
+}

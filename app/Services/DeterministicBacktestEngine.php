@@ -52,8 +52,25 @@ class DeterministicBacktestEngine
         $peakEquity = $config['initial_capital'];
         $exposedCandles = 0;
         $insufficientSignalData = false;
+        $equityCurve = [];
+        $buyAndHoldState = $this->initialState($config['initial_capital']);
+        $buyAndHoldSignal = [
+            'signal_candle_open_time' => $rows[0]['open_time'],
+            'reason' => 'Referência buy-and-hold com o mesmo capital, custos e slippage declarados.',
+            'condition_results' => [],
+        ];
+        $this->execute(
+            $buyAndHoldState,
+            'entry',
+            $rows[0]['open'],
+            '100',
+            $config['fee_rate'],
+            $config['slippage_rate'],
+            $buyAndHoldSignal,
+        );
 
         foreach ($rows as $index => $candle) {
+            $event = null;
             if ($pending !== null) {
                 $trade = $this->execute(
                     $actual,
@@ -71,6 +88,7 @@ class DeterministicBacktestEngine
 
                 if ($trade !== null) {
                     $trades[] = $trade;
+                    $event = $trade['event_type'];
                 }
                 $pending = null;
             }
@@ -87,6 +105,14 @@ class DeterministicBacktestEngine
             if ($this->decimal->compare($drawdown, $maximumDrawdown) > 0) {
                 $maximumDrawdown = $drawdown;
             }
+
+            $equityCurve[] = [
+                'timestamp' => $candle['close_time'],
+                'strategy_equity' => $equity,
+                'buy_and_hold_equity' => $this->equity($buyAndHoldState, $candle['close']),
+                'close_price' => $candle['close'],
+                'event' => $event,
+            ];
 
             $evaluation = $this->signals->evaluate($version, array_slice($rows, 0, $index + 1));
             if ($evaluation['data_status'] !== 'complete') {
@@ -135,6 +161,21 @@ class DeterministicBacktestEngine
             $warnings[] = 'A posição aberta foi liquidada no fechamento do último candle conforme configuração do cenário.';
         }
 
+        if ($config['close_open_position_at_end']) {
+            $this->execute($buyAndHoldState, 'exit', $last['close'], '100', $config['fee_rate'], $config['slippage_rate'], [
+                'signal_candle_open_time' => $last['open_time'],
+                'reason' => 'Liquidação de buy-and-hold no fechamento final conforme cenário.',
+                'condition_results' => [],
+            ], true, $last['open_time']);
+
+            $lastPoint = array_key_last($equityCurve);
+            $equityCurve[$lastPoint]['strategy_equity'] = $this->equity($actual, $last['close']);
+            $equityCurve[$lastPoint]['buy_and_hold_equity'] = $this->equity($buyAndHoldState, $last['close']);
+            if ($equityCurve[$lastPoint]['event'] === null && $actual['quantity'] === '0.0000000000000000') {
+                $equityCurve[$lastPoint]['event'] = 'exit';
+            }
+        }
+
         if ($insufficientSignalData) {
             $warnings[] = 'Parte do período não possuía candles suficientes para avaliar todos os indicadores; nenhum fill foi criado nesses pontos.';
         }
@@ -176,6 +217,7 @@ class DeterministicBacktestEngine
                 'dataset_start_at' => $rows[0]['open_time'],
                 'dataset_end_at' => $last['close_time'],
                 'buy_and_hold' => $buyAndHold,
+                'equity_curve' => $equityCurve,
             ],
         ];
     }

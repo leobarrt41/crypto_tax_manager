@@ -21,4 +21,9 @@ class BacktestRunPolicy
     {
         return (int) $user->id === (int) $run->user_id;
     }
+
+    public function delete(User $user, BacktestRun $run): bool
+    {
+        return (int) $user->id === (int) $run->user_id;
+    }
 }
