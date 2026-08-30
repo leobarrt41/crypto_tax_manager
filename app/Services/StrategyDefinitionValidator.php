@@ -6,7 +6,13 @@ use Illuminate\Validation\ValidationException;
 
 class StrategyDefinitionValidator
 {
-    private const INDICATORS = ['rsi', 'sma', 'ema', 'macd', 'bollinger', 'moving_average_cross'];
+    private const INDICATORS = ['rsi', 'sma', 'ema', 'macd', 'bollinger', 'ma_cross'];
+
+    private const OPERATIONAL_KEYS = [
+        'symbol', 'pair', 'exchange', 'timeframe', 'side', 'mode',
+        'execution', 'order_type', 'quantity', 'quote_amount',
+        'leverage', 'real_execution_enabled',
+    ];
 
     private const OPERATORS = [
         'greater_than',
@@ -29,14 +35,8 @@ class StrategyDefinitionValidator
     public function validate(array $definition, bool $allowIncompleteDraft = false): array
     {
         $errors = [];
-        $allowedKeys = ['schema_version', 'logic', 'conditions', 'risk'];
-        $forbiddenKeys = ['symbol', 'exchange', 'timeframe', 'side', 'mode'];
-
-        foreach ($forbiddenKeys as $key) {
-            if (array_key_exists($key, $definition)) {
-                $errors[$key][] = 'Este campo pertence a Backtests ou Operações e não pode compor uma estratégia.';
-            }
-        }
+        $allowedKeys = ['schema_version', 'logic', 'entry_conditions', 'exit_conditions', 'risk'];
+        $this->rejectOperationalKeys($definition, 'definition', $errors);
 
         foreach (array_keys($definition) as $key) {
             if (!in_array($key, $allowedKeys, true)) {
@@ -52,23 +52,28 @@ class StrategyDefinitionValidator
             $errors['logic'][] = 'A lógica deve ser all ou any.';
         }
 
-        $conditions = $definition['conditions'] ?? null;
-        if (!is_array($conditions)) {
-            $errors['conditions'][] = 'As condições devem ser uma lista.';
-            $conditions = [];
-        }
-
-        if (!$allowIncompleteDraft && count($conditions) === 0) {
-            $errors['conditions'][] = 'Inclua ao menos uma condição antes de validar a estratégia.';
-        }
-
-        foreach ($conditions as $index => $condition) {
-            if (!is_array($condition)) {
-                $errors["conditions.{$index}"][] = 'Cada condição deve ser um objeto.';
-                continue;
+        $conditionGroups = [];
+        foreach (['entry_conditions', 'exit_conditions'] as $group) {
+            $conditions = $definition[$group] ?? null;
+            if (!is_array($conditions) || !array_is_list($conditions)) {
+                $errors[$group][] = 'As condições devem ser uma lista.';
+                $conditions = [];
             }
 
-            $this->validateCondition($condition, $index, $errors);
+            foreach ($conditions as $index => $condition) {
+                if (!is_array($condition)) {
+                    $errors["{$group}.{$index}"][] = 'Cada condição deve ser um objeto.';
+                    continue;
+                }
+
+                $this->validateCondition($condition, "{$group}.{$index}", $errors);
+            }
+
+            $conditionGroups[$group] = array_values($conditions);
+        }
+
+        if (!$allowIncompleteDraft && count($conditionGroups['entry_conditions']) + count($conditionGroups['exit_conditions']) === 0) {
+            $errors['entry_conditions'][] = 'Inclua ao menos uma condição de entrada ou saída antes de validar a estratégia.';
         }
 
         $risk = $definition['risk'] ?? [];
@@ -86,15 +91,18 @@ class StrategyDefinitionValidator
         return $this->canonicalize([
             'schema_version' => 1,
             'logic' => $definition['logic'],
-            'conditions' => array_values($conditions),
-            'risk' => $risk,
+            'entry_conditions' => $conditionGroups['entry_conditions'],
+            'exit_conditions' => $conditionGroups['exit_conditions'],
+            'risk' => [
+                'stop_loss_pct' => $risk['stop_loss_pct'] ?? null,
+                'take_profit_pct' => $risk['take_profit_pct'] ?? null,
+            ],
         ]);
     }
 
     /** @param array<string, mixed> $condition @param array<string, array<int, string>> $errors */
-    private function validateCondition(array $condition, int $index, array &$errors): void
+    private function validateCondition(array $condition, string $prefix, array &$errors): void
     {
-        $prefix = "conditions.{$index}";
         $indicator = $condition['indicator'] ?? null;
         $operator = $condition['operator'] ?? null;
 
@@ -113,16 +121,28 @@ class StrategyDefinitionValidator
             return;
         }
 
+        $allowedParameters = match ($indicator) {
+            'rsi', 'sma', 'ema' => ['period'],
+            'macd' => ['fast_period', 'slow_period', 'signal_period'],
+            'bollinger' => ['period', 'std_dev'],
+            'ma_cross' => ['fast_period', 'slow_period'],
+        };
+        foreach (array_keys($parameters) as $parameter) {
+            if (!in_array($parameter, $allowedParameters, true)) {
+                $errors["{$prefix}.parameters.{$parameter}"][] = 'Parâmetro não permitido para este indicador.';
+            }
+        }
+
         match ($indicator) {
             'rsi', 'sma', 'ema', 'bollinger' => $this->validatePeriod($parameters['period'] ?? null, "{$prefix}.parameters.period", $errors),
             'macd' => $this->validateMacd($parameters, $prefix, $errors),
-            'moving_average_cross' => $this->validateCross($parameters, $prefix, $errors),
+            'ma_cross' => $this->validateCross($parameters, $prefix, $errors),
         };
 
         if ($indicator === 'bollinger') {
             $stdDev = $parameters['std_dev'] ?? null;
-            if (!is_numeric($stdDev) || (float) $stdDev <= 0 || (float) $stdDev > 10) {
-                $errors["{$prefix}.parameters.std_dev"][] = 'std_dev deve estar entre 0 e 10.';
+            if (!is_numeric($stdDev) || (float) $stdDev <= 0) {
+                $errors["{$prefix}.parameters.std_dev"][] = 'std_dev deve ser positivo.';
             }
         }
 
@@ -145,7 +165,7 @@ class StrategyDefinitionValidator
                     'parameters' => $condition['compare_with']['parameters'] ?? [],
                     'operator' => 'greater_than',
                     'value' => 0,
-                ], $index, $errors);
+                ], "{$prefix}.compare_with", $errors);
             }
         }
     }
@@ -183,15 +203,12 @@ class StrategyDefinitionValidator
             $errors["{$prefix}.parameters.fast_period"][] = 'fast_period deve ser menor que slow_period.';
         }
 
-        if (!in_array($parameters['average_type'] ?? 'ema', ['sma', 'ema'], true)) {
-            $errors["{$prefix}.parameters.average_type"][] = 'average_type deve ser sma ou ema.';
-        }
     }
 
     /** @param array<string, mixed> $risk @param array<string, array<int, string>> $errors */
     private function validateRisk(array $risk, array &$errors): void
     {
-        $allowedRiskKeys = ['stop_loss_pct', 'take_profit_pct', 'trailing_stop_pct'];
+        $allowedRiskKeys = ['stop_loss_pct', 'take_profit_pct'];
 
         foreach ($risk as $key => $value) {
             if (!in_array($key, $allowedRiskKeys, true)) {
@@ -199,8 +216,23 @@ class StrategyDefinitionValidator
                 continue;
             }
 
-            if (!is_numeric($value) || (float) $value <= 0 || (float) $value > 100) {
+            if ($value !== null && (!is_numeric($value) || (float) $value <= 0 || (float) $value > 100)) {
                 $errors["risk.{$key}"][] = 'O percentual deve ser maior que 0 e no máximo 100.';
+            }
+        }
+    }
+
+    /** @param array<string, mixed> $value @param array<string, array<int, string>> $errors */
+    private function rejectOperationalKeys(array $value, string $path, array &$errors): void
+    {
+        foreach ($value as $key => $item) {
+            $itemPath = "{$path}.{$key}";
+            if (is_string($key) && in_array(strtolower($key), self::OPERATIONAL_KEYS, true)) {
+                $errors[$itemPath][] = 'Campo operacional proibido na definição reutilizável da estratégia.';
+            }
+
+            if (is_array($item)) {
+                $this->rejectOperationalKeys($item, $itemPath, $errors);
             }
         }
     }

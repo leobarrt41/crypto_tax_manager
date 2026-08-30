@@ -3,7 +3,6 @@
 namespace App\Services;
 
 use App\Models\TradingStrategyVersion;
-use Illuminate\Validation\ValidationException;
 use InvalidArgumentException;
 
 class StrategySignalEvaluator
@@ -18,50 +17,66 @@ class StrategySignalEvaluator
      * @param array<int, array<string, mixed>> $candles
      * @return array<string, mixed>
      */
-    public function evaluate(TradingStrategyVersion $version, array $candles, string $decisionOnMatch = 'buy_signal'): array
+    public function evaluate(TradingStrategyVersion $version, array $candles): array
     {
-        if (!in_array($decisionOnMatch, ['buy_signal', 'sell_signal'], true)) {
-            throw ValidationException::withMessages([
-                'decision_on_match' => 'A decisão deve ser buy_signal ou sell_signal.',
-            ]);
-        }
-
         $definition = $this->validator->validate($version->definition);
         $closedCandles = $this->indicators->closedCandles($candles);
         $baseResult = [
             'evaluated_at' => now()->toIso8601String(),
             'candle_close_time' => $closedCandles === [] ? null : ($closedCandles[array_key_last($closedCandles)]['close_time'] ?? null),
             'strategy_version_id' => $version->id,
+            'strategy_version' => $version->version,
             'definition_hash' => $version->definition_hash,
         ];
 
         try {
-            $conditionResults = array_map(
-                fn (array $condition, int $index) => $this->evaluateCondition($condition, $index, $closedCandles),
-                $definition['conditions'],
-                array_keys($definition['conditions']),
-            );
+            $entryResults = $this->evaluateConditions($definition['entry_conditions'], $closedCandles);
+            $exitResults = $this->evaluateConditions($definition['exit_conditions'], $closedCandles);
         } catch (InvalidArgumentException $exception) {
             return $baseResult + [
-                'decision' => 'no_signal',
-                'conditions' => [],
+                'decision' => 'hold',
+                'condition_results' => ['entry' => [], 'exit' => []],
                 'data_status' => 'insufficient_data',
                 'reason' => $exception->getMessage(),
             ];
         }
 
-        $matches = $definition['logic'] === 'all'
-            ? array_reduce($conditionResults, fn (bool $carry, array $condition) => $carry && $condition['result'], true)
-            : array_reduce($conditionResults, fn (bool $carry, array $condition) => $carry || $condition['result'], false);
+        $entryMatches = $this->matches($entryResults, $definition['logic']);
+        $exitMatches = $this->matches($exitResults, $definition['logic']);
+        $decision = $exitMatches ? 'exit' : ($entryMatches ? 'entry' : 'hold');
 
         return $baseResult + [
-            'decision' => $matches ? $decisionOnMatch : 'no_signal',
-            'conditions' => $conditionResults,
+            'decision' => $decision,
+            'condition_results' => ['entry' => $entryResults, 'exit' => $exitResults],
             'data_status' => 'complete',
-            'reason' => $matches
-                ? 'Todas as condições aplicáveis foram atendidas pela última vela fechada.'
-                : 'A lógica da estratégia não foi atendida pela última vela fechada.',
+            'reason' => match ($decision) {
+                'entry' => 'As condições de entrada foram atendidas pela última vela fechada.',
+                'exit' => 'As condições de saída foram atendidas pela última vela fechada.',
+                default => 'Nenhum conjunto de condições foi atendido pela última vela fechada.',
+            },
         ];
+    }
+
+    /** @param array<int, array<string, mixed>> $conditions @param array<int, array<string, mixed>> $candles */
+    private function evaluateConditions(array $conditions, array $candles): array
+    {
+        return array_map(
+            fn (array $condition, int $index) => $this->evaluateCondition($condition, $index, $candles),
+            $conditions,
+            array_keys($conditions),
+        );
+    }
+
+    /** @param array<int, array<string, mixed>> $results */
+    private function matches(array $results, string $logic): bool
+    {
+        if ($results === []) {
+            return false;
+        }
+
+        return $logic === 'all'
+            ? array_reduce($results, fn (bool $carry, array $condition) => $carry && $condition['result'], true)
+            : array_reduce($results, fn (bool $carry, array $condition) => $carry || $condition['result'], false);
     }
 
     /**
@@ -144,7 +159,7 @@ class StrategySignalEvaluator
             'ema' => $this->indicators->ema($candles, (int) $parameters['period']),
             'macd' => $this->macdSeries($candles, $parameters),
             'bollinger' => $this->bollingerSeries($candles, $parameters),
-            'moving_average_cross' => $this->crossSeries($candles, $parameters),
+            'ma_cross' => $this->crossSeries($candles, $parameters),
             default => throw new InvalidArgumentException('Indicador não suportado para avaliação.'),
         };
     }
@@ -159,7 +174,7 @@ class StrategySignalEvaluator
             (int) $parameters['signal_period'],
         );
 
-        return $macd[$parameters['component'] ?? 'line'] ?? $macd['line'];
+        return $macd['line'];
     }
 
     /** @param array<string, mixed> $parameters @return array<int, float|null> */
@@ -171,15 +186,14 @@ class StrategySignalEvaluator
             (float) $parameters['std_dev'],
         );
 
-        return $bands[$parameters['component'] ?? 'middle'] ?? $bands['middle'];
+        return $bands['middle'];
     }
 
     /** @param array<string, mixed> $parameters @return array<int, float|null> */
     private function crossSeries(array $candles, array $parameters): array
     {
-        $average = $parameters['average_type'] ?? 'ema';
-        $fast = $this->indicators->{$average}($candles, (int) $parameters['fast_period']);
-        $slow = $this->indicators->{$average}($candles, (int) $parameters['slow_period']);
+        $fast = $this->indicators->ema($candles, (int) $parameters['fast_period']);
+        $slow = $this->indicators->ema($candles, (int) $parameters['slow_period']);
 
         return array_map(
             fn ($fastValue, $slowValue) => $fastValue !== null && $slowValue !== null ? $fastValue - $slowValue : null,

@@ -6,6 +6,7 @@ use App\Models\TradingStrategy;
 use App\Models\TradingStrategyVersion;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
+use LogicException;
 
 class StrategyVersionService
 {
@@ -51,6 +52,7 @@ class StrategyVersionService
     /** @param array<string, mixed> $definition */
     public function createNewVersion(TradingStrategy $strategy, User $user, string $name, ?string $description, array $definition): TradingStrategyVersion
     {
+        $this->assertOwnedAndEditable($strategy, $user);
         $normalizedDefinition = $this->validator->validate($definition);
 
         return DB::transaction(function () use ($strategy, $user, $name, $description, $normalizedDefinition): TradingStrategyVersion {
@@ -79,6 +81,10 @@ class StrategyVersionService
 
     public function archive(TradingStrategy $strategy, User $user): void
     {
+        if ($strategy->user_id !== $user->id) {
+            throw new LogicException('A estratégia pertence a outro usuário.');
+        }
+
         DB::transaction(function () use ($strategy, $user): void {
             $strategy->update([
                 'archived_at' => now(),
@@ -97,6 +103,17 @@ class StrategyVersionService
                 'strategy_version_service',
             );
         });
+    }
+
+    private function assertOwnedAndEditable(TradingStrategy $strategy, User $user): void
+    {
+        if ($strategy->user_id !== $user->id) {
+            throw new LogicException('A estratégia pertence a outro usuário.');
+        }
+
+        if ($strategy->archived_at !== null) {
+            throw new LogicException('Estratégias arquivadas não podem receber novas versões.');
+        }
     }
 
     /** @param array<string, mixed> $definition */

@@ -148,6 +148,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::get('/{strategy}', [StrategyDefinitionController::class, 'show'])->name('show');
             Route::get('/{strategy}/edit', [StrategyDefinitionController::class, 'edit'])->name('edit');
             Route::patch('/{strategy}', [StrategyDefinitionController::class, 'update'])->name('update');
+            Route::post('/{strategy}/validate', [StrategyDefinitionController::class, 'validateDefinition'])->name('validate-owned');
             Route::post('/{strategy}/archive', [StrategyDefinitionController::class, 'archive'])->name('archive');
             Route::post('/{strategy}/preview', [StrategyDefinitionController::class, 'preview'])->name('preview');
         });

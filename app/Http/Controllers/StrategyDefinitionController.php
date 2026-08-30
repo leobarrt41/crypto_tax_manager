@@ -114,8 +114,12 @@ class StrategyDefinitionController extends Controller
             ->with('success', 'Estratégia arquivada. O histórico de versões foi preservado.');
     }
 
-    public function validateDefinition(Request $request): JsonResponse
+    public function validateDefinition(Request $request, ?TradingStrategy $strategy = null): JsonResponse
     {
+        if ($strategy !== null) {
+            $this->authorize('update', $strategy);
+        }
+
         $definition = $request->validate(['definition' => ['required', 'array']])['definition'];
         $normalized = $this->validator->validate($definition);
 
@@ -124,7 +128,11 @@ class StrategyDefinitionController extends Controller
             'strategy_definition_validated',
             'Definição de estratégia validada sem persistência.',
             'info',
-            payload: ['conditions_count' => count($normalized['conditions'])],
+            $strategy?->id,
+            payload: [
+                'entry_conditions_count' => count($normalized['entry_conditions']),
+                'exit_conditions_count' => count($normalized['exit_conditions']),
+            ],
             source: 'strategy_definition_controller',
         );
 
@@ -143,16 +151,11 @@ class StrategyDefinitionController extends Controller
             'candles.*.close' => ['required', 'numeric'],
             'candles.*.close_time' => ['required'],
             'candles.*.is_closed' => ['nullable', 'boolean'],
-            'decision_on_match' => ['nullable', 'in:buy_signal,sell_signal'],
         ]);
 
         $version = $strategy->currentVersion;
         abort_if($version === null, 422, 'A estratégia não possui uma versão atual para prévia.');
-        $result = $this->signalEvaluator->evaluate(
-            $version,
-            $payload['candles'],
-            $payload['decision_on_match'] ?? 'buy_signal',
-        );
+        $result = $this->signalEvaluator->evaluate($version, $payload['candles']);
 
         $this->auditLogger->record(
             $request->user()->id,
@@ -185,6 +188,8 @@ class StrategyDefinitionController extends Controller
     /** @param array<string, mixed> $definition */
     private function minimumRequiredCandles(array $definition): int
     {
+        $conditions = array_merge($definition['entry_conditions'], $definition['exit_conditions']);
+
         return max(1, ...array_map(function (array $condition): int {
             $parameters = $condition['parameters'] ?? [];
 
@@ -192,12 +197,12 @@ class StrategyDefinitionController extends Controller
                 'rsi' => ((int) $parameters['period']) + 1,
                 'sma', 'ema', 'bollinger' => (int) $parameters['period'],
                 'macd' => (int) $parameters['slow_period'] + (int) $parameters['signal_period'] - 1,
-                'moving_average_cross' => (int) $parameters['slow_period'],
+                'ma_cross' => (int) $parameters['slow_period'],
                 default => 1,
             };
 
             return $required + (in_array($condition['operator'] ?? null, ['crosses_above', 'crosses_below'], true) ? 1 : 0);
-        }, $definition['conditions']));
+        }, $conditions));
     }
 
     /** @return array<string, mixed> */
@@ -208,9 +213,9 @@ class StrategyDefinitionController extends Controller
                 ['key' => 'rsi', 'label' => 'RSI', 'parameters' => ['period']],
                 ['key' => 'sma', 'label' => 'Média móvel simples (SMA)', 'parameters' => ['period']],
                 ['key' => 'ema', 'label' => 'Média móvel exponencial (EMA)', 'parameters' => ['period']],
-                ['key' => 'macd', 'label' => 'MACD', 'parameters' => ['fast_period', 'slow_period', 'signal_period', 'component']],
-                ['key' => 'bollinger', 'label' => 'Bandas de Bollinger', 'parameters' => ['period', 'std_dev', 'component']],
-                ['key' => 'moving_average_cross', 'label' => 'Cruzamento de médias', 'parameters' => ['fast_period', 'slow_period', 'average_type']],
+                ['key' => 'macd', 'label' => 'MACD', 'parameters' => ['fast_period', 'slow_period', 'signal_period']],
+                ['key' => 'bollinger', 'label' => 'Bandas de Bollinger', 'parameters' => ['period', 'std_dev']],
+                ['key' => 'ma_cross', 'label' => 'Cruzamento de médias exponenciais', 'parameters' => ['fast_period', 'slow_period']],
             ],
             'operators' => [
                 'greater_than', 'less_than', 'greater_than_or_equal', 'less_than_or_equal',

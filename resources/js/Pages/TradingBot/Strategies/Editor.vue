@@ -27,7 +27,7 @@
           <section class="rounded-xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
             <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <h2 class="text-lg font-semibold text-slate-900">2. Condições de sinal</h2>
+                <h2 class="text-lg font-semibold text-slate-900">2. Condições de entrada e saída</h2>
                 <p class="mt-1 text-sm text-slate-600">Apenas candles fechados serão considerados. A ordem das condições é preservada na versão.</p>
               </div>
               <select v-model="form.definition.logic" class="rounded-md border-slate-300 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
@@ -37,10 +37,11 @@
             </div>
 
             <div class="mt-5 space-y-4">
-              <article v-for="(condition, index) in form.definition.conditions" :key="index" class="rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <template v-for="group in conditionGroups" :key="group.key">
+              <article v-for="(condition, index) in group.conditions" :key="`${group.key}-${index}`" class="rounded-lg border border-slate-200 bg-slate-50 p-4">
                 <div class="flex items-center justify-between gap-4">
-                  <h3 class="font-semibold text-slate-800">Condição {{ index + 1 }}</h3>
-                  <button v-if="form.definition.conditions.length > 1" type="button" class="text-sm font-semibold text-rose-700 hover:text-rose-900" @click="removeCondition(index)">Remover</button>
+                  <h3 class="font-semibold text-slate-800">{{ group.label }} {{ index + 1 }}</h3>
+                  <button v-if="totalConditions > 1" type="button" class="text-sm font-semibold text-rose-700 hover:text-rose-900" @click="removeCondition(group.key, index)">Remover</button>
                 </div>
 
                 <div class="mt-4 grid gap-4 md:grid-cols-3">
@@ -84,17 +85,21 @@
                   </div>
                 </div>
               </article>
+              </template>
             </div>
 
-            <button type="button" class="mt-4 text-sm font-semibold text-indigo-700 hover:text-indigo-900" @click="addCondition">+ Adicionar condição</button>
+            <div class="mt-4 flex gap-4">
+              <button type="button" class="text-sm font-semibold text-indigo-700 hover:text-indigo-900" @click="addCondition('entry_conditions')">+ Condição de entrada</button>
+              <button type="button" class="text-sm font-semibold text-indigo-700 hover:text-indigo-900" @click="addCondition('exit_conditions')">+ Condição de saída</button>
+            </div>
             <p class="mt-4 text-sm text-slate-600">Mínimo estimado: <strong>{{ minimumCandles }} candles fechados</strong> para avaliar esta estratégia.</p>
             <p v-if="formErrors.definition" class="mt-2 text-sm text-rose-700">{{ formErrors.definition }}</p>
           </section>
 
           <section class="rounded-xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
             <h2 class="text-lg font-semibold text-slate-900">3. Configurações de risco</h2>
-            <p class="mt-1 text-sm text-slate-600">São apenas parâmetros cadastrados. Stop-loss, take-profit e trailing stop não são executados nesta fase.</p>
-            <div class="mt-4 grid gap-4 md:grid-cols-3">
+            <p class="mt-1 text-sm text-slate-600">São apenas parâmetros cadastrados. Stop-loss e take-profit não são executados nesta fase.</p>
+            <div class="mt-4 grid gap-4 md:grid-cols-2">
               <label v-for="risk in riskFields" :key="risk.key" class="block">
                 <span class="text-sm font-medium text-slate-700">{{ risk.label }}</span>
                 <div class="relative mt-1">
@@ -145,32 +150,37 @@ const errors = ref({})
 const riskFields = [
   { key: 'stop_loss_pct', label: 'Stop-loss' },
   { key: 'take_profit_pct', label: 'Take-profit' },
-  { key: 'trailing_stop_pct', label: 'Trailing stop' },
 ]
 
 const defaultCondition = () => ({ indicator: 'rsi', parameters: { period: 14 }, operator: 'less_than', value: 30 })
-const definition = props.version?.definition || { schema_version: 1, logic: 'all', conditions: [defaultCondition()], risk: {} }
+const definition = props.version?.definition || {
+  schema_version: 1,
+  logic: 'all',
+  entry_conditions: [defaultCondition()],
+  exit_conditions: [],
+  risk: { stop_loss_pct: null, take_profit_pct: null },
+}
 const form = reactive({
   name: props.strategy?.name || '',
   description: props.strategy?.description || '',
   definition: JSON.parse(JSON.stringify(definition)),
 })
 
-const formErrors = computed(() => ({ definition: errors.value.conditions?.[0] }))
+const formErrors = computed(() => ({ definition: errors.value.entry_conditions?.[0] || errors.value.exit_conditions?.[0] }))
 const parameterFields = (indicator) => ({
   rsi: [{ key: 'period', label: 'Período' }],
   sma: [{ key: 'period', label: 'Período' }],
   ema: [{ key: 'period', label: 'Período' }],
-  macd: [{ key: 'fast_period', label: 'Período rápido' }, { key: 'slow_period', label: 'Período lento' }, { key: 'signal_period', label: 'Período do sinal' }, { key: 'component', label: 'Componente', options: ['line', 'signal', 'histogram'] }],
-  bollinger: [{ key: 'period', label: 'Período' }, { key: 'std_dev', label: 'Desvios-padrão' }, { key: 'component', label: 'Componente', options: ['middle', 'upper', 'lower'] }],
-  moving_average_cross: [{ key: 'fast_period', label: 'Período rápido' }, { key: 'slow_period', label: 'Período lento' }, { key: 'average_type', label: 'Tipo de média', options: ['ema', 'sma'] }],
+  macd: [{ key: 'fast_period', label: 'Período rápido' }, { key: 'slow_period', label: 'Período lento' }, { key: 'signal_period', label: 'Período do sinal' }],
+  bollinger: [{ key: 'period', label: 'Período' }, { key: 'std_dev', label: 'Desvios-padrão' }],
+  ma_cross: [{ key: 'fast_period', label: 'Período rápido' }, { key: 'slow_period', label: 'Período lento' }],
 }[indicator] || [])
 
 const defaults = {
   rsi: { period: 14 }, sma: { period: 20 }, ema: { period: 20 },
-  macd: { fast_period: 12, slow_period: 26, signal_period: 9, component: 'line' },
-  bollinger: { period: 20, std_dev: 2, component: 'middle' },
-  moving_average_cross: { fast_period: 20, slow_period: 50, average_type: 'ema' },
+  macd: { fast_period: 12, slow_period: 26, signal_period: 9 },
+  bollinger: { period: 20, std_dev: 2 },
+  ma_cross: { fast_period: 20, slow_period: 50 },
 }
 
 const availableOperators = (indicator) => {
@@ -197,21 +207,26 @@ const resetOperatorValues = (condition) => {
   if (!isIndicatorComparison(condition.operator)) delete condition.compare_with
 }
 const resetComparisonParameters = (condition) => { condition.compare_with.parameters = { period: 50 } }
-const addCondition = () => form.definition.conditions.push(defaultCondition())
-const removeCondition = (index) => form.definition.conditions.splice(index, 1)
+const conditionGroups = computed(() => [
+  { key: 'entry_conditions', label: 'Entrada', conditions: form.definition.entry_conditions },
+  { key: 'exit_conditions', label: 'Saída', conditions: form.definition.exit_conditions },
+])
+const totalConditions = computed(() => form.definition.entry_conditions.length + form.definition.exit_conditions.length)
+const addCondition = (group) => form.definition[group].push(defaultCondition())
+const removeCondition = (group, index) => form.definition[group].splice(index, 1)
 
-const minimumCandles = computed(() => Math.max(...form.definition.conditions.map((condition) => {
+const minimumCandles = computed(() => Math.max(...[...form.definition.entry_conditions, ...form.definition.exit_conditions].map((condition) => {
   const p = condition.parameters
   let required = Number(p.period || 0)
   if (condition.indicator === 'rsi') required = Number(p.period || 0) + 1
   if (condition.indicator === 'macd') required = Number(p.slow_period || 0) + Number(p.signal_period || 0) - 1
-  if (condition.indicator === 'moving_average_cross') required = Number(p.slow_period || 0)
+  if (condition.indicator === 'ma_cross') required = Number(p.slow_period || 0)
   return required + (['crosses_above', 'crosses_below'].includes(condition.operator) ? 1 : 0)
 }), 1))
 
 const logicPreview = computed(() => {
   const logic = form.definition.logic === 'all' ? 'todas' : 'qualquer uma'
-  const conditions = form.definition.conditions.map((condition) => `${condition.indicator.toUpperCase()} ${condition.operator.replaceAll('_', ' ')}`).join('; ')
+  const conditions = [...form.definition.entry_conditions, ...form.definition.exit_conditions].map((condition) => `${condition.indicator.toUpperCase()} ${condition.operator.replaceAll('_', ' ')}`).join('; ')
   return `A estratégia gera sinal quando ${logic} destas condições forem atendidas na última vela fechada: ${conditions}.`
 })
 

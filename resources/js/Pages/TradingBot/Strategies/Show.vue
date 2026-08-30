@@ -31,8 +31,11 @@
           <div v-if="strategy.current_version" class="mt-5 space-y-3">
             <p class="text-sm text-slate-700"><strong>Lógica:</strong> {{ strategy.current_version.definition.logic === 'all' ? 'Todas as condições devem ser atendidas.' : 'Qualquer condição pode ser atendida.' }}</p>
             <ul class="space-y-2">
-              <li v-for="(condition, index) in strategy.current_version.definition.conditions" :key="index" class="rounded-md bg-slate-50 p-3 text-sm text-slate-800">
-                <strong>Condição {{ index + 1 }}:</strong> {{ condition.indicator.toUpperCase() }} {{ condition.operator.replaceAll('_', ' ') }}<span v-if="condition.value !== undefined"> {{ condition.value }}</span>
+              <li v-for="(condition, index) in strategy.current_version.definition.entry_conditions" :key="`entry-${index}`" class="rounded-md bg-slate-50 p-3 text-sm text-slate-800">
+                <strong>Entrada {{ index + 1 }}:</strong> {{ condition.indicator.toUpperCase() }} {{ condition.operator.replaceAll('_', ' ') }}<span v-if="condition.value !== undefined"> {{ condition.value }}</span>
+              </li>
+              <li v-for="(condition, index) in strategy.current_version.definition.exit_conditions" :key="`exit-${index}`" class="rounded-md bg-slate-50 p-3 text-sm text-slate-800">
+                <strong>Saída {{ index + 1 }}:</strong> {{ condition.indicator.toUpperCase() }} {{ condition.operator.replaceAll('_', ' ') }}<span v-if="condition.value !== undefined"> {{ condition.value }}</span>
               </li>
             </ul>
             <div v-if="Object.keys(strategy.current_version.definition.risk || {}).length" class="rounded-md border border-slate-200 p-3 text-sm text-slate-700">

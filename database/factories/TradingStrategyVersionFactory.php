@@ -13,8 +13,9 @@ class TradingStrategyVersionFactory extends Factory
         $definition = [
             'schema_version' => 1,
             'logic' => 'all',
-            'conditions' => [],
-            'risk' => [],
+            'entry_conditions' => [],
+            'exit_conditions' => [],
+            'risk' => ['stop_loss_pct' => null, 'take_profit_pct' => null],
         ];
 
         return [

@@ -101,9 +101,10 @@ class IndicatorCalculator
             throw new InvalidArgumentException('fast_period deve ser menor que slow_period.');
         }
 
-        $fast = $this->ema($candles, $fastPeriod);
-        $slow = $this->ema($candles, $slowPeriod);
-        $line = array_fill(0, count($candles), null);
+        $closedCandles = $this->closedCandles($candles);
+        $fast = $this->ema($closedCandles, $fastPeriod);
+        $slow = $this->ema($closedCandles, $slowPeriod);
+        $line = array_fill(0, count($closedCandles), null);
 
         foreach ($line as $index => $_) {
             if ($fast[$index] !== null && $slow[$index] !== null) {
@@ -114,7 +115,7 @@ class IndicatorCalculator
         $nonNullLine = array_values(array_filter($line, fn ($value) => $value !== null));
         $this->assertSufficientData($nonNullLine, $signalPeriod);
         $seedIndex = array_key_first(array_filter($line, fn ($value) => $value !== null));
-        $signal = array_fill(0, count($candles), null);
+        $signal = array_fill(0, count($closedCandles), null);
         $seed = array_sum(array_slice($nonNullLine, 0, $signalPeriod)) / $signalPeriod;
         $signalIndex = $seedIndex + $signalPeriod - 1;
         $signal[$signalIndex] = $seed;

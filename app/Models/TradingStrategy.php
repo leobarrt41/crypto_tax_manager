@@ -14,9 +14,11 @@ class TradingStrategy extends Model
     protected $fillable = [
         'name',
         'description',
+        'type',
         'parameters',
         'user_id',
         'mode',
+        'is_active',
         'current_version_id',
         'archived_at',
     ];
