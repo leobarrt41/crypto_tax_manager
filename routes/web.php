@@ -161,6 +161,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::get('/create', [BacktestController::class, 'create'])->name('create');
             Route::post('/', [BacktestController::class, 'store'])->name('store');
             Route::get('/{backtest}', [BacktestController::class, 'show'])->name('show');
+            Route::delete('/{backtest}', [BacktestController::class, 'destroy'])->name('destroy');
         });
     });
 

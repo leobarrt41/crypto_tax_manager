@@ -30,6 +30,20 @@
 
           <!-- Top Right Actions -->
           <div class="flex items-center space-x-4">
+            <button
+              type="button"
+              class="inline-flex h-10 w-10 items-center justify-center rounded-full text-gray-500 transition hover:bg-gray-100 hover:text-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
+              :aria-label="isDark ? 'Ativar modo claro' : 'Ativar modo escuro'"
+              :title="isDark ? 'Ativar modo claro' : 'Ativar modo escuro'"
+              @click="toggleTheme"
+            >
+              <svg v-if="isDark" class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364-.707-.707M6.343 6.343l-.707-.707m12.728 0-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+              </svg>
+              <svg v-else class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 1012 21a9.003 9.003 0 008.354-5.646z" />
+              </svg>
+            </button>
             
             <!-- Notifications -->
             <button class="relative text-gray-500 hover:text-gray-700">
@@ -136,6 +150,8 @@ const props = defineProps({
 const sidebarRef = ref(null)
 const showUserMenu = ref(false)
 const notificationCount = ref(3) // Exemplo
+const isDark = ref(false)
+let colorSchemeQuery = null
 
 // Acesso aos dados da página
 const page = usePage()
@@ -220,6 +236,20 @@ const logout = () => {
   }
 }
 
+const applyTheme = (theme, persist = true) => {
+  isDark.value = theme === 'dark'
+  document.documentElement.classList.toggle('dark', isDark.value)
+  document.documentElement.style.colorScheme = theme
+  if (persist) localStorage.setItem('crypto-tax-theme', theme)
+}
+
+const toggleTheme = () => applyTheme(isDark.value ? 'light' : 'dark')
+
+const followSystemTheme = (event) => {
+  if (localStorage.getItem('crypto-tax-theme')) return
+  applyTheme(event.matches ? 'dark' : 'light', false)
+}
+
 // Fechar menus ao clicar fora
 const handleClickOutside = (event) => {
   // Lógica para fechar menus
@@ -229,10 +259,14 @@ const handleClickOutside = (event) => {
 // Lifecycle
 onMounted(() => {
   document.addEventListener('click', handleClickOutside)
+  isDark.value = document.documentElement.classList.contains('dark')
+  colorSchemeQuery = window.matchMedia('(prefers-color-scheme: dark)')
+  colorSchemeQuery.addEventListener?.('change', followSystemTheme)
 })
 
 onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside)
+  colorSchemeQuery?.removeEventListener?.('change', followSystemTheme)
 })
 
 // Expor funções para o Sidebar usar
@@ -302,4 +336,3 @@ defineExpose({
   }
 }
 </style>
-

@@ -94,6 +94,28 @@ class DeterministicBacktestEngineTest extends TestCase
         $this->assertSame('last_candle_close', $liquidated['trades'][1]['fill_rule']);
     }
 
+    public function test_equity_curve_contains_one_comparable_point_per_candle_and_trade_markers(): void
+    {
+        $candles = $this->candles();
+        $result = $this->executeBacktest($candles);
+        $curve = $result['metrics']['equity_curve'];
+
+        $this->assertCount(count($candles), $curve);
+        $this->assertSame('2026-01-01T01:00:00+00:00', $curve[0]['timestamp']);
+        $this->assertSame('2026-01-01T06:00:00+00:00', $curve[array_key_last($curve)]['timestamp']);
+        $this->assertSame('entry', $curve[2]['event']);
+        $this->assertSame('exit', $curve[5]['event']);
+
+        foreach ($curve as $point) {
+            $this->assertArrayHasKey('strategy_equity', $point);
+            $this->assertArrayHasKey('buy_and_hold_equity', $point);
+            $this->assertArrayHasKey('close_price', $point);
+        }
+
+        $this->assertSame($result['metrics']['final_equity'], $curve[array_key_last($curve)]['strategy_equity']);
+        $this->assertSame($result['metrics']['buy_and_hold']['final_equity'], $curve[array_key_last($curve)]['buy_and_hold_equity']);
+    }
+
     public function test_gap_blocks_backtest_without_creating_simulated_trades(): void
     {
         $candles = $this->candles();
