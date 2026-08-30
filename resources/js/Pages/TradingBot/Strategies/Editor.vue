@@ -5,7 +5,7 @@
         <div class="rounded-xl border border-indigo-100 bg-indigo-50 p-5 text-indigo-950">
           <h1 class="text-2xl font-bold">{{ isEditing ? 'Nova versão da estratégia' : 'Criar estratégia' }}</h1>
           <p class="mt-1 text-sm leading-6">
-            A regra será salva para backtesting futuro. Par, exchange, timeframe, modo operacional e lado da ordem serão definidos somente em fases posteriores.
+            Defina uma regra reutilizável. Backtest, operação, mercado e demais parâmetros operacionais serão escolhidos separadamente nas etapas futuras.
           </p>
         </div>
 
@@ -113,7 +113,14 @@
           <section class="rounded-xl border border-slate-200 bg-slate-50 p-5">
             <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-700">Prévia da lógica</h2>
             <p class="mt-2 text-sm leading-6 text-slate-800">{{ logicPreview }}</p>
-            <p class="mt-3 text-xs text-slate-500">Esta prévia não consulta exchanges, não executa backtest e não cria operações.</p>
+            <p class="mt-3 text-xs text-slate-500">Esta prévia não consulta exchanges, não usa chaves de API, não executa backtest e não cria operações.</p>
+          </section>
+
+          <section class="rounded-xl border border-sky-200 bg-sky-50 p-5 text-sky-950">
+            <h2 class="text-sm font-semibold">Regra reutilizável</h2>
+            <p class="mt-1 text-sm leading-6">
+              Após salvar, uma versão desta estratégia poderá ser selecionada em backtests e, em fase futura, na criação de operações paper. Salvar não inicia o bot, não ativa monitoramento e não envia ordens.
+            </p>
           </section>
 
           <div v-if="Object.keys(errors).length" class="rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
@@ -124,7 +131,7 @@
           <div class="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
             <Link :href="route('trading-bot.strategies.index')" class="rounded-lg border border-slate-300 px-4 py-2.5 text-center text-sm font-semibold text-slate-700 hover:bg-slate-50">Cancelar</Link>
             <button type="submit" :disabled="submitting" class="rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60">
-              {{ submitting ? 'Salvando...' : 'Salvar estratégia para backtesting' }}
+              {{ submitting ? 'Salvando...' : 'Salvar estratégia' }}
             </button>
           </div>
         </form>
