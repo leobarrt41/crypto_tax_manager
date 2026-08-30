@@ -183,17 +183,21 @@ class TradingStrategyPhaseOneTest extends TestCase
         $user = User::factory()->create();
         app(StrategyVersionService::class)->createStrategy($user, 'Resumo local', null, $this->definition());
 
-        $this->actingAs($user)->get(route('trading-bot.index'))
-            ->assertOk()
-            ->assertSee('TradingBot\\/Overview', false)
-            ->assertSee('&quot;strategies_count&quot;:1', false)
-            ->assertSee('&quot;versions_count&quot;:1', false)
-            ->assertSee('&quot;executionEnabled&quot;:false', false);
+        $overviewResponse = $this->actingAs($user)->get(route('trading-bot.index'))
+            ->assertOk();
+        $overviewPage = $this->inertiaPage((string) $overviewResponse->getContent());
 
-        $this->actingAs($user)->get(route('trading-bot.strategies.index'))
-            ->assertOk()
-            ->assertSee('TradingBot\\/Strategies\\/Index', false)
-            ->assertDontSee('TradingBot\\/Overview', false);
+        $this->assertSame('TradingBot/Overview', $overviewPage['component']);
+        $this->assertSame(1, $overviewPage['props']['summary']['strategies_count']);
+        $this->assertSame(1, $overviewPage['props']['summary']['versions_count']);
+        $this->assertFalse($overviewPage['props']['executionEnabled']);
+
+        $strategiesResponse = $this->actingAs($user)->get(route('trading-bot.strategies.index'))
+            ->assertOk();
+        $strategiesPage = $this->inertiaPage((string) $strategiesResponse->getContent());
+
+        $this->assertSame('TradingBot/Strategies/Index', $strategiesPage['component']);
+        $this->assertNotSame($overviewPage['component'], $strategiesPage['component']);
     }
 
     public function test_production_strategy_mutations_require_csrf_for_an_authenticated_owner(): void
@@ -355,6 +359,15 @@ class TradingStrategyPhaseOneTest extends TestCase
         });
 
         $this->assertSame([], $forbidden->map(fn ($route) => $route->uri())->values()->all());
+    }
+
+    /** @return array<string, mixed> */
+    private function inertiaPage(string $content): array
+    {
+        preg_match('/data-page="([^"]+)"/', $content, $matches);
+        $this->assertArrayHasKey(1, $matches, 'A resposta Inertia deve conter o atributo data-page.');
+
+        return json_decode(htmlspecialchars_decode($matches[1]), true, 512, JSON_THROW_ON_ERROR);
     }
 
     /** @return array<string, mixed> */
