@@ -193,6 +193,8 @@ class TradingSafetyFoundationTest extends TestCase
 
     public function test_security_migration_columns_exist_on_sqlite(): void
     {
+        $this->assertSame('text', Schema::getColumnType('user_api_keys', 'api_key'));
+        $this->assertSame('text', Schema::getColumnType('user_api_keys', 'secret_key'));
         $this->assertTrue(Schema::hasColumns('user_api_keys', [
             'read_enabled', 'trading_enabled', 'trading_enabled_at',
         ]));

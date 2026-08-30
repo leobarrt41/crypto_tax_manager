@@ -16,8 +16,9 @@ class CreateUserApiKeysTable extends Migration
             // Relacionamento com a tabela exchanges
             $table->foreignId('exchange_id')->constrained()->onDelete('cascade');
 
-            $table->string('api_key');
-            $table->string('secret_key');
+            // Credenciais criptografadas podem ultrapassar o limite de VARCHAR(255).
+            $table->text('api_key');
+            $table->text('secret_key');
 
             $table->timestamps();
         });
