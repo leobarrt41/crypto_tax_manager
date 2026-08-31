@@ -65,13 +65,14 @@
           <div class="grid gap-5 sm:grid-cols-2">
             <label class="block">
               <span class="text-sm font-medium text-slate-700">Início (UTC)</span>
-              <input v-model="form.start_at" type="datetime-local" class="mt-1 block w-full rounded-lg border-slate-300 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500" required>
+              <input v-model="form.start_at" type="datetime-local" :max="form.end_at || undefined" class="mt-1 block w-full rounded-lg border-slate-300 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500" required>
               <p v-if="form.errors.start_at" class="mt-1 text-sm text-rose-600">{{ form.errors.start_at }}</p>
             </label>
             <label class="block">
               <span class="text-sm font-medium text-slate-700">Fim (UTC)</span>
-              <input v-model="form.end_at" type="datetime-local" class="mt-1 block w-full rounded-lg border-slate-300 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500" required>
-              <p v-if="form.errors.end_at" class="mt-1 text-sm text-rose-600">{{ form.errors.end_at }}</p>
+              <input v-model="form.end_at" type="datetime-local" :min="form.start_at || undefined" :max="maximumEndAt || undefined" class="mt-1 block w-full rounded-lg border-slate-300 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500" :aria-invalid="Boolean(periodError || form.errors.end_at)" required>
+              <p v-if="periodError || form.errors.end_at" class="mt-1 text-sm font-medium text-rose-600 dark:text-rose-400">{{ periodError || form.errors.end_at }}</p>
+              <p v-else-if="periodDurationLabel" class="mt-1 text-xs text-slate-500">Intervalo selecionado: {{ periodDurationLabel }}.</p>
             </label>
             <label class="block">
               <span class="text-sm font-medium text-slate-700">Capital inicial (USDT)</span>
@@ -98,7 +99,7 @@
 
           <div class="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
             <Link :href="route('trading-bot.backtests.index')" class="inline-flex justify-center rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">Cancelar</Link>
-            <button type="submit" :disabled="form.processing" class="inline-flex justify-center rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60">{{ form.processing ? 'Calculando…' : 'Executar simulação histórica' }}</button>
+            <button type="submit" :disabled="form.processing || Boolean(periodError)" class="inline-flex justify-center rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60">{{ form.processing ? 'Calculando…' : 'Executar simulação histórica' }}</button>
           </div>
         </form>
       </div>
@@ -140,5 +141,29 @@ watch(selectedMarket, (market) => {
 })
 
 const shortHash = (value) => value ? `${value.slice(0, 12)}…` : 'sem hash'
-const submit = () => form.post(route('trading-bot.backtests.store'))
+const parseUtcLocal = (value) => value ? Date.parse(`${value}:00Z`) : NaN
+const formatUtcLocal = (timestamp) => new Date(timestamp).toISOString().slice(0, 16)
+const maximumPeriodMilliseconds = computed(() => Number(props.defaults.maximum_period_days) * 86400000)
+const maximumEndAt = computed(() => {
+  const start = parseUtcLocal(form.start_at)
+  return Number.isFinite(start) ? formatUtcLocal(start + maximumPeriodMilliseconds.value) : ''
+})
+const periodMilliseconds = computed(() => parseUtcLocal(form.end_at) - parseUtcLocal(form.start_at))
+const periodError = computed(() => {
+  if (!form.start_at || !form.end_at) return ''
+  if (!Number.isFinite(periodMilliseconds.value) || periodMilliseconds.value <= 0) return 'O fim deve ser posterior ao início.'
+  if (periodMilliseconds.value > maximumPeriodMilliseconds.value) return `O intervalo não pode ser maior que ${props.defaults.maximum_period_days} dias.`
+  return ''
+})
+const periodDurationLabel = computed(() => {
+  if (!form.start_at || !form.end_at || periodError.value) return ''
+  const totalHours = Math.round(periodMilliseconds.value / 3600000)
+  const days = Math.floor(totalHours / 24)
+  const hours = totalHours % 24
+  return hours ? `${days} dia(s) e ${hours} hora(s)` : `${days} dia(s)`
+})
+const submit = () => {
+  if (periodError.value) return
+  form.post(route('trading-bot.backtests.store'))
+}
 </script>

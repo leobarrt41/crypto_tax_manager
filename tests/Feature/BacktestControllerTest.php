@@ -132,6 +132,24 @@ class BacktestControllerTest extends TestCase
         $this->assertDatabaseCount('backtest_runs', 0);
     }
 
+    public function test_backtest_rejects_an_interval_even_slightly_longer_than_180_days(): void
+    {
+        $this->withoutMiddleware(\App\Http\Middleware\VerifyCsrfToken::class);
+        $payload = $this->payload();
+        $payload['start_at'] = '2025-01-01T00:00:00Z';
+        $payload['end_at'] = '2025-06-30T00:01:00Z';
+
+        $response = $this->actingAs($this->owner)
+            ->from(route('trading-bot.backtests.create'))
+            ->post(route('trading-bot.backtests.store'), $payload);
+
+        $response->assertRedirect(route('trading-bot.backtests.create'));
+        $response->assertSessionHasErrors([
+            'end_at' => 'O intervalo não pode ser maior que 180 dias.',
+        ]);
+        $this->assertDatabaseCount('backtest_runs', 0);
+    }
+
     /** @return array<string, mixed> */
     private function payload(): array
     {
