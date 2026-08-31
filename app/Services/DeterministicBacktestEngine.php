@@ -48,7 +48,8 @@ class DeterministicBacktestEngine
         $trades = [];
         $warnings = [];
         $pending = null;
-        $maximumDrawdown = '0.0000000000000000';
+        $maximumDrawdownLoss = '0.0000000000000000';
+        $maximumDrawdownPeak = $config['initial_capital'];
         $peakEquity = $config['initial_capital'];
         $exposedCandles = 0;
         $insufficientSignalData = false;
@@ -68,6 +69,7 @@ class DeterministicBacktestEngine
             $config['slippage_rate'],
             $buyAndHoldSignal,
         );
+        $evaluations = $this->signals->evaluateSeries($version, $rows);
 
         foreach ($rows as $index => $candle) {
             $event = null;
@@ -101,9 +103,15 @@ class DeterministicBacktestEngine
             if ($this->decimal->compare($equity, $peakEquity) > 0) {
                 $peakEquity = $equity;
             }
-            $drawdown = $this->decimal->percent($this->decimal->subtract($peakEquity, $equity), $peakEquity);
-            if ($this->decimal->compare($drawdown, $maximumDrawdown) > 0) {
-                $maximumDrawdown = $drawdown;
+            $drawdownLoss = $this->decimal->subtract($peakEquity, $equity);
+            if ($this->decimal->compare($drawdownLoss, '0') > 0 && $this->decimal->compareFractions(
+                $drawdownLoss,
+                $peakEquity,
+                $maximumDrawdownLoss,
+                $maximumDrawdownPeak,
+            ) > 0) {
+                $maximumDrawdownLoss = $drawdownLoss;
+                $maximumDrawdownPeak = $peakEquity;
             }
 
             $equityCurve[] = [
@@ -114,7 +122,7 @@ class DeterministicBacktestEngine
                 'event' => $event,
             ];
 
-            $evaluation = $this->signals->evaluate($version, array_slice($rows, 0, $index + 1));
+            $evaluation = $evaluations[$index];
             if ($evaluation['data_status'] !== 'complete') {
                 $insufficientSignalData = true;
                 continue;
@@ -210,7 +218,7 @@ class DeterministicBacktestEngine
                 'exits_count' => count($closedTrades),
                 'closed_trades_count' => count($closedTrades),
                 'win_rate_percentage' => $closedTrades === [] ? '0.0000000000000000' : $this->decimal->percent((string) count($winningTrades), (string) count($closedTrades)),
-                'max_drawdown_percentage' => $maximumDrawdown,
+                'max_drawdown_percentage' => $this->decimal->percent($maximumDrawdownLoss, $maximumDrawdownPeak),
                 'exposure_percentage' => $this->decimal->percent((string) $exposedCandles, (string) count($rows)),
                 'open_position_at_end' => $actual['quantity'] !== '0.0000000000000000',
                 'candles_used' => count($rows),

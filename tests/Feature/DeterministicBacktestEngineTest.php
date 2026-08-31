@@ -49,6 +49,61 @@ class DeterministicBacktestEngineTest extends TestCase
         $this->assertSame($hash, $first['dataset_hash']);
     }
 
+    public function test_precalculated_signal_series_matches_the_existing_point_evaluator_at_each_candle(): void
+    {
+        $candles = $this->candles();
+        $series = app(\App\Services\StrategySignalEvaluator::class)->evaluateSeries($this->version, $candles);
+
+        foreach ($candles as $index => $_) {
+            $point = app(\App\Services\StrategySignalEvaluator::class)->evaluate($this->version, array_slice($candles, 0, $index + 1));
+
+            $this->assertSame($point['decision'], $series[$index]['decision']);
+            $this->assertSame($point['data_status'], $series[$index]['data_status']);
+            if ($point['data_status'] === 'complete') {
+                $this->assertSame($point['reason'], $series[$index]['reason']);
+                $this->assertSame($point['condition_results'], $series[$index]['condition_results']);
+            }
+        }
+    }
+
+    public function test_precalculated_series_preserves_all_supported_indicator_decisions(): void
+    {
+        $user = \App\Models\User::factory()->create();
+        $conditions = [
+            ['indicator' => 'sma', 'parameters' => ['period' => 2], 'operator' => 'less_than', 'value' => 100],
+            ['indicator' => 'ema', 'parameters' => ['period' => 2], 'operator' => 'greater_than', 'value' => 0],
+            ['indicator' => 'rsi', 'parameters' => ['period' => 2], 'operator' => 'less_than_or_equal', 'value' => 100],
+            ['indicator' => 'macd', 'parameters' => ['fast_period' => 2, 'slow_period' => 3, 'signal_period' => 2], 'operator' => 'greater_than', 'value' => -100],
+            ['indicator' => 'bollinger', 'parameters' => ['period' => 2, 'std_dev' => 2], 'operator' => 'greater_than', 'value' => 0],
+            ['indicator' => 'ma_cross', 'parameters' => ['fast_period' => 2, 'slow_period' => 3], 'operator' => 'greater_than', 'value' => -100],
+            ['indicator' => 'sma', 'parameters' => ['period' => 2], 'operator' => 'greater_than_indicator', 'compare_with' => ['indicator' => 'ema', 'parameters' => ['period' => 2]]],
+        ];
+        $evaluator = app(\App\Services\StrategySignalEvaluator::class);
+
+        foreach ($conditions as $index => $condition) {
+            $version = app(StrategyVersionService::class)->createStrategy($user, "Indicador {$index}", null, [
+                'schema_version' => 1,
+                'logic' => 'all',
+                'entry_conditions' => [$condition],
+                'exit_conditions' => [],
+                'risk' => ['stop_loss_pct' => null, 'take_profit_pct' => null],
+            ])->currentVersion;
+            $candles = $this->candles();
+            $series = $evaluator->evaluateSeries($version, $candles);
+
+            foreach ($candles as $candleIndex => $_) {
+                $point = $evaluator->evaluate($version, array_slice($candles, 0, $candleIndex + 1));
+
+                $context = "Indicador {$condition['indicator']} (caso {$index}), candle {$candleIndex}";
+                $this->assertSame($point['decision'], $series[$candleIndex]['decision'], $context);
+                $this->assertSame($point['data_status'], $series[$candleIndex]['data_status'], $context);
+                if ($point['data_status'] === 'complete') {
+                    $this->assertSame($point['condition_results'], $series[$candleIndex]['condition_results']);
+                }
+            }
+        }
+    }
+
     public function test_signal_on_candle_n_is_filled_only_at_the_open_of_candle_n_plus_one(): void
     {
         $candles = $this->candles();

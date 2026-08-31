@@ -104,6 +104,26 @@ class DecimalMath
         return $leftNegative ? -$comparison : $comparison;
     }
 
+    /**
+     * Compara leftNumerator/leftDenominator com rightNumerator/rightDenominator sem divisão.
+     * Denominadores precisam ser positivos.
+     */
+    public function compareFractions(
+        mixed $leftNumerator,
+        mixed $leftDenominator,
+        mixed $rightNumerator,
+        mixed $rightDenominator,
+    ): int {
+        if ($this->compare($leftDenominator, '0') <= 0 || $this->compare($rightDenominator, '0') <= 0) {
+            throw new InvalidArgumentException('Denominadores de fração devem ser positivos.');
+        }
+
+        return $this->compare(
+            $this->multiply($leftNumerator, $rightDenominator),
+            $this->multiply($rightNumerator, $leftDenominator),
+        );
+    }
+
     public function isZero(mixed $value): bool
     {
         [, $digits] = $this->parts($value);
