@@ -17,6 +17,8 @@ use Inertia\Response;
 
 class BacktestController extends Controller
 {
+    private const MAX_PERIOD_DAYS = 180;
+
     public function __construct(
         private readonly MarketCandleIngestionService $marketData,
         private readonly BacktestRunService $backtests,
@@ -69,7 +71,7 @@ class BacktestController extends Controller
                 'fee_rate' => '0.1',
                 'slippage_rate' => '0.05',
                 'close_open_position_at_end' => false,
-                'maximum_period_days' => 180,
+                'maximum_period_days' => self::MAX_PERIOD_DAYS,
                 'timezone' => 'UTC',
             ],
             'executionEnabled' => false,
@@ -94,7 +96,11 @@ class BacktestController extends Controller
 
         $startAt = CarbonImmutable::parse($payload['start_at'], 'UTC')->utc();
         $endAt = CarbonImmutable::parse($payload['end_at'], 'UTC')->utc();
-        abort_if($startAt->diffInDays($endAt) > 180, 422, 'O período de backtest é limitado a 180 dias por solicitação.');
+        if ($startAt->diffInSeconds($endAt) > self::MAX_PERIOD_DAYS * 86400) {
+            return back()->withErrors([
+                'end_at' => 'O intervalo não pode ser maior que 180 dias.',
+            ])->withInput();
+        }
 
         $version = TradingStrategyVersion::query()->with('strategy')->findOrFail($payload['strategy_version_id']);
         $this->authorize('view', $version->strategy);

@@ -44,7 +44,7 @@ class BinancePublicMarketDataProvider implements MarketDataProviderInterface
             throw new InvalidArgumentException('O fim da coleta deve ser posterior ao início.');
         }
 
-        if ($startAt->diffInDays($endAt) > self::MAX_RANGE_DAYS) {
+        if ($startAt->diffInSeconds($endAt) > self::MAX_RANGE_DAYS * 86400) {
             throw new InvalidArgumentException('A coleta pública é limitada a 180 dias por solicitação.');
         }
 
