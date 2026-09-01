@@ -11,7 +11,7 @@
                 <p class="text-gray-600 mt-1">Gere relatórios fiscais e de performance</p>
               </div>
               <div class="flex space-x-3">
-                <Link :href="route('reports.tax-report')" 
+                <Link :href="route('reports.relatorio-ir')"
                       class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors">
                   <svg class="w-5 h-5 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
@@ -127,7 +127,7 @@
             </svg>
             <h3 class="text-lg font-medium text-gray-900 mb-2">Nenhum relatório encontrado</h3>
             <p class="text-gray-500 mb-4">Comece gerando seu primeiro relatório fiscal.</p>
-            <Link :href="route('reports.tax-report')" 
+            <Link :href="route('reports.relatorio-ir')"
                   class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors">
               Gerar Primeiro Relatório
             </Link>
@@ -231,9 +231,34 @@ import AppLayout from '@/Layouts/AppLayout.vue'
 import StatCard from '@/Components/StatCard.vue'
 
 const props = defineProps({
-  reports: Object,
-  stats: Object,
-  filters: Object
+  availableReports: {
+    type: Object,
+    default: () => ({})
+  },
+  reports: {
+    type: Object,
+    default: () => ({
+      data: [],
+      from: 0,
+      to: 0,
+      total: 0,
+      prev_page_url: null,
+      next_page_url: null
+    })
+  },
+  stats: {
+    type: Object,
+    default: () => ({
+      total_reports: 0,
+      last_period: '—',
+      total_taxes: 0,
+      compliance_status: 'Não avaliado'
+    })
+  },
+  filters: {
+    type: Object,
+    default: () => ({})
+  }
 })
 
 const loading = ref(false)
@@ -315,4 +340,3 @@ const deleteReport = (report) => {
   }
 }
 </script>
-
