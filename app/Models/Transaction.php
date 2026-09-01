@@ -24,6 +24,7 @@ class Transaction extends Model
         'pricing_attempts',
         'pricing_last_attempted_at',
         'pricing_failure_reason',
+        'fifo_status',
         'txid',
         'reference',
         'date',
@@ -98,6 +99,14 @@ class Transaction extends Model
     public function botOrder()
     {
         return $this->belongsTo(BotOrder::class);
+    }
+
+    /**
+     * Pendência de histórico de aquisição aberta ou resolvida para esta saída.
+     */
+    public function fifoInventoryGap()
+    {
+        return $this->hasOne(FifoInventoryGap::class);
     }
 
 

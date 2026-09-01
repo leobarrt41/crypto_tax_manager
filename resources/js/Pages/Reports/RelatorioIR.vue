@@ -80,10 +80,10 @@
             <!-- Botão Exportar CSV -->
             <button
               @click="exportarCsv"
-              :disabled="!filters.year || summaries.length === 0"
+              :disabled="!filters.year || summaries.length === 0 || acquisitionHistory.status === 'incomplete'"
               class="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white rounded-lg font-medium transition-colors"
             >
-              ↓ Exportar CSV
+              {{ acquisitionHistory.status === 'incomplete' ? 'Exportação bloqueada: FIFO incompleto' : '↓ Exportar CSV' }}
             </button>
           </div>
 
@@ -94,14 +94,64 @@
           </div>
         </div>
 
-        <!-- ── Estoque inicial FIFO ───────────────────────────────────────── -->
-        <div class="bg-white rounded-lg shadow p-6 mb-6">
+        <!-- ── Histórico de aquisição ─────────────────────────────────────── -->
+        <section v-if="filters.year" class="mb-6 rounded-lg border p-6 shadow"
+                 :class="acquisitionHistory.status === 'complete' ? 'border-green-200 bg-green-50' : 'border-amber-200 bg-amber-50'">
+          <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h3 class="text-lg font-semibold text-gray-900">Histórico de aquisição</h3>
+              <p v-if="loadingAcquisitionHistory" class="mt-1 text-sm text-gray-600">Verificando as compras e os lotes anteriores...</p>
+              <p v-else-if="acquisitionHistory.status === 'complete'" class="mt-1 text-sm text-green-800">
+                Histórico completo para as saídas registradas em {{ filters.year }}. O relatório fiscal pode ser exportado.
+              </p>
+              <p v-else class="mt-1 text-sm text-amber-900">
+                <strong>FIFO incompleto.</strong> Encontramos uma venda sem compras anteriores suficientes para identificar o custo de compra. Importe seus arquivos CSV anteriores para completar o histórico.
+              </p>
+            </div>
+            <span class="inline-flex w-fit items-center rounded-full px-3 py-1 text-sm font-medium"
+                  :class="acquisitionHistory.status === 'complete' ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-900'">
+              {{ acquisitionHistory.status === 'complete' ? 'Histórico completo' : `${acquisitionHistory.open_gaps_count} pendência(s)` }}
+            </span>
+          </div>
+
+          <template v-if="!loadingAcquisitionHistory && acquisitionHistory.status !== 'complete'">
+            <div class="mt-4 overflow-x-auto rounded-lg border border-amber-200 bg-white">
+              <table class="min-w-full divide-y divide-amber-100">
+                <thead class="bg-amber-50">
+                  <tr>
+                    <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-amber-900">Ativo</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-amber-900">Data</th>
+                    <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-amber-900">Quantidade faltante</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-amber-900">Transação relacionada</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-amber-900">Situação</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-amber-100">
+                  <tr v-for="gap in acquisitionHistory.gaps" :key="gap.id">
+                    <td class="px-4 py-3 text-sm font-semibold text-gray-900">{{ gap.asset }}</td>
+                    <td class="px-4 py-3 text-sm text-gray-700">{{ formatDate(gap.occurred_at) }}</td>
+                    <td class="px-4 py-3 text-right text-sm text-gray-700">{{ formatQuantity(gap.missing_quantity) }}</td>
+                    <td class="px-4 py-3 text-sm text-gray-700">#{{ gap.transaction?.id }} · {{ gap.transaction?.type || 'Saída' }}</td>
+                    <td class="px-4 py-3 text-sm font-medium text-amber-800">Operações anteriores ausentes</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="mt-4 flex flex-wrap gap-3">
+              <Link :href="route('transactions.import')" class="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">Importar CSVs anteriores</Link>
+              <button type="button" disabled class="cursor-not-allowed rounded-lg bg-gray-200 px-4 py-2 text-sm font-medium text-gray-500" title="A busca complementar com prévia será disponibilizada em etapa posterior.">Buscar movimentações na Binance</button>
+              <a href="#correcao-manual" class="rounded-lg border border-amber-400 bg-white px-4 py-2 text-sm font-medium text-amber-900 hover:bg-amber-100">Correção manual</a>
+            </div>
+          </template>
+        </section>
+
+        <!-- ── Correção manual de histórico ────────────────────────────────── -->
+        <div id="correcao-manual" class="bg-white rounded-lg shadow p-6 mb-6">
           <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between mb-5">
             <div>
-              <h3 class="text-lg font-semibold text-gray-800">Estoque inicial do FIFO</h3>
+              <h3 class="text-lg font-semibold text-gray-800">Correção manual de histórico não reconstruído</h3>
               <p class="text-sm text-gray-600 mt-1">
-                Informe o saldo e o custo histórico existentes em <strong>31/12 do ano anterior</strong>.
-                Esses registros serão os primeiros lotes consumidos no recálculo FIFO do ano selecionado.
+                Use esta correção somente quando a aquisição não estiver nas transações importadas. O saldo e o custo histórico em <strong>31/12 do ano anterior</strong> serão usados como primeiros lotes no recálculo do ano selecionado.
               </p>
             </div>
             <span v-if="filters.year" class="inline-flex w-fit items-center rounded-full bg-blue-50 px-3 py-1 text-sm font-medium text-blue-700">
@@ -140,11 +190,15 @@
                 <input v-model.trim="openingBalanceForm.notes" maxlength="2000" placeholder="Ex.: Custo consolidado de aquisições anteriores"
                        class="w-full rounded-md border-gray-300 focus:border-blue-500 focus:ring-blue-500" />
               </div>
+              <label class="md:col-span-2 lg:col-span-3 flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                <input v-model="confirmManualCorrection" type="checkbox" class="mt-1 rounded border-amber-400 text-amber-600 focus:ring-amber-500" />
+                <span>Entendo que esta é uma correção excepcional. Só confirmarei se a aquisição não estiver nas transações importadas, pois um lote manual adicional pode duplicar o estoque FIFO.</span>
+              </label>
               <div class="flex items-end">
                 <button type="submit" :disabled="savingOpeningBalance"
                         class="w-full rounded-lg bg-indigo-600 px-4 py-2 font-medium text-white transition-colors hover:bg-indigo-700 disabled:bg-gray-400">
                   <span v-if="savingOpeningBalance">Salvando...</span>
-                  <span v-else>Salvar saldo inicial</span>
+                  <span v-else>Salvar correção manual</span>
                 </button>
               </div>
             </form>
@@ -305,6 +359,15 @@ const feedback     = reactive({ message: '', type: 'success' })
 const openingBalances = ref([])
 const loadingOpeningBalances = ref(false)
 const savingOpeningBalance = ref(false)
+const loadingAcquisitionHistory = ref(false)
+const acquisitionHistory = ref({
+  status: 'complete',
+  is_official_export_available: true,
+  open_gaps_count: 0,
+  gaps: [],
+  coverage: [],
+})
+const confirmManualCorrection = ref(false)
 const openingBalanceForm = reactive({
   asset: '',
   quantity: '',
@@ -324,6 +387,14 @@ const formatQuantity = (value) => {
   return Number.isFinite(normalized)
     ? new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 12 }).format(normalized)
     : '0'
+}
+
+const formatDate = (value) => {
+  if (!value) return 'Data não informada'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime())
+    ? 'Data não informada'
+    : new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeZone: 'America/Sao_Paulo' }).format(date)
 }
 
 const showFeedback = (message, type = 'success') => {
@@ -361,6 +432,29 @@ async function loadSummary() {
   }
 }
 
+async function loadAcquisitionHistory() {
+  if (!filters.year) {
+    acquisitionHistory.value = { status: 'complete', is_official_export_available: true, open_gaps_count: 0, gaps: [], coverage: [] }
+    return
+  }
+
+  loadingAcquisitionHistory.value = true
+  try {
+    const res = await fetch(`/reports/relatorio-ir/acquisition-history?year=${filters.year}`, {
+      headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+      credentials: 'same-origin',
+    })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.message ?? 'Erro ao verificar o histórico de aquisição.')
+    acquisitionHistory.value = data
+  } catch (err) {
+    acquisitionHistory.value = { status: 'incomplete', is_official_export_available: false, open_gaps_count: 0, gaps: [], coverage: [] }
+    showFeedback(err.message, 'error')
+  } finally {
+    loadingAcquisitionHistory.value = false
+  }
+}
+
 async function recalcularFifo() {
   loadingRecalc.value = true
 
@@ -386,7 +480,9 @@ async function recalcularFifo() {
     )
 
     // Recarrega a tabela se já havia um ano selecionado
-    if (filters.year) await loadSummary()
+    if (filters.year) {
+      await Promise.all([loadSummary(), loadAcquisitionHistory()])
+    }
   } catch (err) {
     showFeedback(err.message, 'error')
   } finally {
@@ -440,6 +536,7 @@ async function salvarSaldoInicial() {
         total_cost_brl: openingBalanceForm.total_cost_brl,
         source: openingBalanceForm.source || null,
         notes: openingBalanceForm.notes || null,
+        confirm_manual_correction: confirmManualCorrection.value,
       }),
     })
     const data = await res.json()
@@ -447,6 +544,7 @@ async function salvarSaldoInicial() {
     if (!res.ok || !data.success) throw new Error(data.message ?? 'Erro ao salvar saldo inicial.')
 
     Object.assign(openingBalanceForm, { asset: '', quantity: '', total_cost_brl: '', source: '', notes: '' })
+    confirmManualCorrection.value = false
     await loadOpeningBalances()
     showFeedback(data.message, 'success')
   } catch (err) {
@@ -481,20 +579,40 @@ async function removerSaldoInicial(balance) {
 }
 
 watch(() => filters.year, async () => {
-  await loadOpeningBalances()
+  await Promise.all([loadOpeningBalances(), loadAcquisitionHistory()])
 })
 
 if (filters.year) {
   loadOpeningBalances()
+  loadAcquisitionHistory()
 }
 
-function exportarCsv() {
-  if (!filters.year) return
+async function exportarCsv() {
+  if (!filters.year || acquisitionHistory.value.status === 'incomplete') return
 
   const params = new URLSearchParams({ year: filters.year })
   if (filters.month) params.append('month', filters.month)
 
-  window.location.href = `/reports/relatorio-ir/export-csv?${params}`
+  try {
+    const res = await fetch(`/reports/relatorio-ir/export-csv?${params}`, {
+      headers: { 'Accept': 'text/csv, application/json', 'X-Requested-With': 'XMLHttpRequest' },
+      credentials: 'same-origin',
+    })
+    if (!res.ok) {
+      const data = await res.json()
+      throw new Error(data.message ?? 'A exportação fiscal não está disponível.')
+    }
+
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `relatorio_ir_${filters.year}${filters.month ? `_${filters.month}` : ''}.csv`
+    link.click()
+    URL.revokeObjectURL(url)
+  } catch (err) {
+    showFeedback(err.message, 'error')
+  }
 }
 
 function getCsrfToken() {

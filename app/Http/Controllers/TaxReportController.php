@@ -4,15 +4,19 @@ namespace App\Http\Controllers;
 
 use App\Models\TaxMonthlySummary;
 use App\Models\FifoOpeningBalance;
+use App\Models\Transaction;
 use App\Services\FifoCalculatorService;
+use App\Services\FifoAcquisitionHistoryService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Inertia\Inertia;
 
 class TaxReportController extends Controller
 {
-    public function __construct(private FifoCalculatorService $fifo)
-    {
+    public function __construct(
+        private FifoCalculatorService $fifo,
+        private FifoAcquisitionHistoryService $acquisitionHistory,
+    ) {
     }
 
     // ─── Inertia Page ────────────────────────────────────────────────────────────
@@ -147,6 +151,23 @@ class TaxReportController extends Controller
     }
 
     /**
+     * Retorna as lacunas abertas de histórico de aquisição e a cobertura já
+     * registrada das importações. Este endpoint não consulta a Binance.
+     * GET /reports/relatorio-ir/acquisition-history?year=2024
+     */
+    public function acquisitionHistory(Request $request)
+    {
+        $data = $request->validate([
+            'year' => 'required|integer|min:2009|max:2099',
+        ]);
+
+        return response()->json($this->acquisitionHistory->forYear(
+            Auth::user(),
+            (int) $data['year'],
+        ));
+    }
+
+    /**
      * Retorna os saldos de abertura usados como primeiro lote FIFO no ano.
      * GET /reports/relatorio-ir/opening-balances?fiscal_year=2024
      */
@@ -182,10 +203,23 @@ class TaxReportController extends Controller
             'total_cost_brl' => 'required|numeric|min:0',
             'source'         => 'nullable|string|max:100',
             'notes'          => 'nullable|string|max:2000',
+            'confirm_manual_correction' => 'nullable|boolean',
         ]);
 
         $data['asset']          = strtoupper(trim($data['asset']));
         $data['reference_date'] = sprintf('%d-12-31', (int) $data['fiscal_year'] - 1);
+
+        if (!$request->boolean('confirm_manual_correction') && $this->hasReconstructedAcquisition(
+            Auth::id(),
+            $data['asset'],
+            $data['reference_date'],
+        )) {
+            return response()->json([
+                'success' => false,
+                'requires_manual_confirmation' => true,
+                'message' => 'Já existem aquisições importadas para este ativo antes da data de referência. A correção manual pode duplicar lotes FIFO; confirme-a somente se o histórico importado ainda não cobrir a aquisição.',
+            ], 422);
+        }
 
         $balance = FifoOpeningBalance::updateOrCreate(
             [
@@ -225,6 +259,20 @@ class TaxReportController extends Controller
         ]);
     }
 
+    private function hasReconstructedAcquisition(int $userId, string $asset, string $referenceDate): bool
+    {
+        return Transaction::query()
+            ->where('user_id', $userId)
+            ->where('to_asset', $asset)
+            ->whereDate('date', '<=', $referenceDate)
+            ->whereIn('type', ['buy', 'fiat_buy', 'trade', 'convert', 'deposit', 'receive', 'earn', 'reward', 'airdrop'])
+            ->where(function ($query): void {
+                $query->whereNull('reconciliation_status')
+                    ->orWhere('reconciliation_status', '!=', 'pending_transfer_reconciliation');
+            })
+            ->exists();
+    }
+
     private function serializeOpeningBalance(FifoOpeningBalance $balance): array
     {
         return [
@@ -255,6 +303,14 @@ class TaxReportController extends Controller
         $user  = Auth::user();
         $year  = (int) $request->year;
         $month = $request->month ? (int) $request->month : null;
+
+        if ($this->acquisitionHistory->hasOpenGaps($user->id, $year, $month)) {
+            return response()->json([
+                'message' => 'A exportação oficial está indisponível porque há operações anteriores ausentes no histórico de aquisição. Importe os CSVs anteriores ou concilie as pendências antes de exportar.',
+                'fifo_status' => 'incomplete',
+                'open_gaps_count' => $this->acquisitionHistory->openGapsCount($user->id, $year, $month),
+            ], 422);
+        }
 
         $query = TaxMonthlySummary::where('user_id', $user->id)
             ->where('year', $year)
