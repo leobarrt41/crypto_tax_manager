@@ -130,6 +130,11 @@ class User extends Authenticatable
         return $this->hasMany(BacktestRun::class);
     }
 
+    public function paperTradingSessions(): HasMany
+    {
+        return $this->hasMany(PaperTradingSession::class);
+    }
+
     public function exchangeKeys()
 {
     return $this->hasMany(UserApiKey::class);

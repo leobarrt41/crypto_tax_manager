@@ -58,6 +58,11 @@ class TradingStrategy extends Model
         return $this->hasMany(BacktestRun::class);
     }
 
+    public function paperTradingSessions(): HasMany
+    {
+        return $this->hasMany(PaperTradingSession::class);
+    }
+
     public function scopeNotArchived($query)
     {
         return $query->whereNull('archived_at');

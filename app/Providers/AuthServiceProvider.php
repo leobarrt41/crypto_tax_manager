@@ -3,7 +3,9 @@
 namespace App\Providers;
 
 use App\Models\BacktestRun;
+use App\Models\PaperTradingSession;
 use App\Policies\BacktestRunPolicy;
+use App\Policies\PaperTradingSessionPolicy;
 
 // use Illuminate\Support\Facades\Gate;
 use Illuminate\Foundation\Support\Providers\AuthServiceProvider as ServiceProvider;
@@ -17,6 +19,7 @@ class AuthServiceProvider extends ServiceProvider
      */
     protected $policies = [
         BacktestRun::class => BacktestRunPolicy::class,
+        PaperTradingSession::class => PaperTradingSessionPolicy::class,
     ];
 
     /**

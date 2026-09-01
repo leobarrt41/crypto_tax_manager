@@ -8,11 +8,11 @@
               <p class="text-sm font-semibold uppercase tracking-wide text-indigo-700">Visão Geral</p>
               <h1 class="mt-1 text-3xl font-bold">Trading Bot</h1>
               <p class="mt-3 text-sm leading-6 text-indigo-900">
-                Estratégias são regras reutilizáveis e versionadas. Elas poderão ser usadas em backtests e operações paper nas próximas fases. Nesta fase, nenhuma operação é iniciada e nenhuma ordem é criada ou enviada.
+                Estratégias são regras reutilizáveis e versionadas. Você pode avaliá-las em backtests históricos e em sessões de paper trading manual. Todas as operações paper são fictícias; nenhuma ordem é criada ou enviada.
               </p>
             </div>
             <span class="inline-flex w-fit rounded-full bg-indigo-200 px-3 py-1 text-xs font-semibold text-indigo-900">
-              Fase 1 — somente estratégias
+              Fase 3 — simulação manual
             </span>
           </div>
         </section>
@@ -42,7 +42,7 @@
             <div>
               <h2 class="text-xl font-semibold text-slate-900">Próximo passo seguro</h2>
               <p class="mt-1 text-sm leading-6 text-slate-600">
-                Defina regras de entrada, saída e risco no editor. A estratégia salva não aciona mercado, saldo ou execução automática.
+                Avalie uma versão em um backtest histórico ou crie uma sessão de paper trading manual. Nenhum dos dois fluxos usa saldo de exchange ou envia ordens.
               </p>
             </div>
             <div class="flex flex-col gap-3 sm:flex-row">
@@ -53,10 +53,10 @@
                 Ver estratégias
               </Link>
               <Link
-                :href="route('trading-bot.strategies.create')"
+                :href="route('trading-bot.paper-trading.index')"
                 class="inline-flex items-center justify-center rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-indigo-700"
               >
-                Criar estratégia
+                Abrir paper trading
               </Link>
             </div>
           </div>
@@ -80,7 +80,7 @@
         <section class="rounded-xl border border-amber-200 bg-amber-50 p-5 text-amber-950">
           <h2 class="text-base font-semibold">Proteções ativas nesta fase</h2>
           <p class="mt-2 text-sm leading-6">
-            Nenhuma chave de API é usada nesta página. Não existe consulta privada à exchange, coleta de candles, monitoramento contínuo, operação paper, job em fila ou execução real. A execução de ordens permanece bloqueada.
+            Nenhuma chave de API é usada nesta página. Paper trading manual pode consultar candles públicos fechados quando você inicia um ciclo, mas não existe consulta privada, saldo de exchange, job em fila, monitoramento contínuo ou execução real. A execução de ordens permanece bloqueada.
           </p>
         </section>
       </div>
@@ -113,15 +113,15 @@ const modules = [
   },
   {
     name: 'Backtesting',
-    status: 'Em breve',
-    description: 'Avaliação histórica será incorporada em fase posterior.',
-    badgeClass: 'bg-slate-100 text-slate-700',
+    status: 'Disponível',
+    description: 'Avaliação histórica com candles fechados, custos, slippage e comparação buy-and-hold.',
+    badgeClass: 'bg-emerald-100 text-emerald-800',
   },
   {
-    name: 'Operações paper',
-    status: 'Em breve',
-    description: 'Simulação de posições e saldos ainda não está ativa.',
-    badgeClass: 'bg-slate-100 text-slate-700',
+    name: 'Paper trading manual',
+    status: 'Disponível',
+    description: 'Carteira fictícia, fills em N+1 e ciclos iniciados manualmente pelo usuário.',
+    badgeClass: 'bg-emerald-100 text-emerald-800',
   },
   {
     name: 'Execução real',

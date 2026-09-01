@@ -38,4 +38,9 @@ class TradingStrategyVersion extends Model
     {
         return $this->hasMany(BacktestRun::class);
     }
+
+    public function paperTradingSessions(): HasMany
+    {
+        return $this->hasMany(PaperTradingSession::class);
+    }
 }
