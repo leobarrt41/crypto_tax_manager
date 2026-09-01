@@ -56,6 +56,74 @@ class FifoInventoryGapTest extends TestCase
         $this->assertSame(FifoInventoryGap::STATUS_OPEN, $gap->fresh()->status);
     }
 
+    public function test_confirmed_quantity_without_cost_partially_reduces_inventory_gap_without_creating_zero_cost(): void
+    {
+        $user = User::factory()->create(['email_verified_at' => now()]);
+        $this->transaction($user, 'asset_dividend', null, null, 'DENT', 100, '2022-01-01 09:00:00', null, [
+            'cost_status' => FifoInventoryGap::COST_PENDING,
+            'quantity_status' => FifoInventoryGap::QUANTITY_COMPLETE,
+        ]);
+        $sale = $this->transaction($user, 'sell', 'DENT', 139, 'BRL', 1500, '2022-01-02 09:00:00', 1500);
+
+        app(FifoCalculatorService::class)->recalculateForUser($user->id);
+        $gap = FifoInventoryGap::query()->sole();
+
+        $this->assertSame(FifoInventoryGap::QUANTITY_INCOMPLETE, $gap->quantity_status);
+        $this->assertSame(FifoInventoryGap::COST_PENDING, $gap->cost_status);
+        $this->assertSame(39.0, (float) $gap->missing_quantity);
+        $this->assertSame(100.0, (float) $gap->pending_cost_quantity);
+        $this->assertSame('insufficient_quantity_and_pending_cost', $gap->reason);
+        $this->assertSame('incomplete', $sale->fresh()->fifo_status);
+        $this->assertSame(FifoInventoryGap::COST_PENDING, $sale->fresh()->cost_status);
+        $this->assertNull($sale->fresh()->cost_basis_brl);
+        $this->assertNull($sale->fresh()->profit_loss_brl);
+    }
+
+    public function test_confirmed_quantity_without_cost_keeps_export_blocked_even_when_quantity_is_fully_covered(): void
+    {
+        $user = User::factory()->create(['email_verified_at' => now()]);
+        $this->transaction($user, 'asset_dividend', null, null, 'DENT', 139, '2022-01-01 09:00:00', null, [
+            'cost_status' => FifoInventoryGap::COST_PENDING,
+            'quantity_status' => FifoInventoryGap::QUANTITY_COMPLETE,
+        ]);
+        $sale = $this->transaction($user, 'sell', 'DENT', 139, 'BRL', 1500, '2022-01-02 09:00:00', 1500);
+
+        app(FifoCalculatorService::class)->recalculateForUser($user->id);
+        $gap = FifoInventoryGap::query()->sole();
+
+        $this->assertSame(FifoInventoryGap::QUANTITY_COMPLETE, $gap->quantity_status);
+        $this->assertSame(FifoInventoryGap::COST_PENDING, $gap->cost_status);
+        $this->assertSame(0.0, (float) $gap->missing_quantity);
+        $this->assertSame(139.0, (float) $gap->pending_cost_quantity);
+        $this->assertSame('pending_acquisition_cost', $gap->reason);
+        $this->assertNull($sale->fresh()->cost_basis_brl);
+        $this->assertNull($sale->fresh()->profit_loss_brl);
+
+        $this->actingAs($user)
+            ->get(route('reports.relatorio-ir.export-csv', ['year' => 2022]))
+            ->assertStatus(422)
+            ->assertJsonPath('fifo_status', 'incomplete');
+    }
+
+    public function test_credit_after_sale_does_not_resolve_the_prior_fifo_gap(): void
+    {
+        $user = User::factory()->create(['email_verified_at' => now()]);
+        $sale = $this->transaction($user, 'sell', 'FHE', 10, 'BRL', 500, '2022-01-02 09:00:00', 500);
+        $fifo = app(FifoCalculatorService::class);
+        $fifo->recalculateForUser($user->id);
+        $gap = FifoInventoryGap::query()->sole();
+
+        $this->transaction($user, 'asset_dividend', null, null, 'FHE', 10, '2022-01-03 09:00:00', null, [
+            'cost_status' => FifoInventoryGap::COST_PENDING,
+            'quantity_status' => FifoInventoryGap::QUANTITY_COMPLETE,
+        ]);
+        $fifo->recalculateForUser($user->id);
+
+        $this->assertSame(FifoInventoryGap::STATUS_OPEN, $gap->fresh()->status);
+        $this->assertSame(10.0, (float) $gap->fresh()->missing_quantity);
+        $this->assertSame('incomplete', $sale->fresh()->fifo_status);
+    }
+
     public function test_new_prior_acquisition_resolves_existing_gap_on_recalculation(): void
     {
         $user = User::factory()->create(['email_verified_at' => now()]);
@@ -146,9 +214,10 @@ class FifoInventoryGapTest extends TestCase
         ?string $toAsset,
         ?float $toAmount,
         string $date,
-        float $totalBrl,
+        ?float $totalBrl,
+        array $attributes = [],
     ): Transaction {
-        return Transaction::query()->create([
+        return Transaction::query()->create(array_merge([
             'user_id' => $user->id,
             'source_type' => User::class,
             'source_id' => $user->id,
@@ -160,6 +229,6 @@ class FifoInventoryGapTest extends TestCase
             'operation' => in_array($type, ['sell', 'withdrawal', 'send'], true) ? 'saida' : 'entrada',
             'total_brl' => $totalBrl,
             'date' => $date,
-        ]);
+        ], $attributes));
     }
 }

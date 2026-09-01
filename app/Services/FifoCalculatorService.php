@@ -29,7 +29,7 @@ use Illuminate\Support\Facades\Log;
 class FifoCalculatorService
 {
     // Tipos que representam ENTRADA de ativo
-    private const ENTRADA_TYPES = ['buy', 'deposit', 'receive', 'earn', 'reward', 'airdrop'];
+    private const ENTRADA_TYPES = ['buy', 'deposit', 'receive', 'earn', 'reward', 'airdrop', 'asset_dividend', 'distribution'];
 
     // Tipos que representam SAÍDA tributável
     private const SAIDA_TYPES = ['sell', 'withdrawal', 'withdraw', 'send', 'fee'];
@@ -123,6 +123,8 @@ class FifoCalculatorService
                 'fifo_lots'       => null,
                 'fifo_processed'  => false,
                 'fifo_status'     => null,
+                'quantity_status' => null,
+                'cost_status'     => null,
             ]);
 
             // ── 3. Zerar resumos mensais no mesmo escopo ────────────────────────
@@ -189,7 +191,7 @@ class FifoCalculatorService
                             $tx,
                             $tx->from_asset,
                             (float) $tx->from_amount,
-                            (float) ($tx->total_brl ?? 0)
+                            (float) ($tx->total_brl ?? 0),
                         );
                         if ($result['is_incomplete'] ?? false) {
                             $detectedGapTransactionIds[] = $tx->id;
@@ -205,8 +207,11 @@ class FifoCalculatorService
                             $lots,
                             $tx->to_asset,
                             (float) $tx->to_amount,
-                            (float) ($tx->total_brl ?? 0),
-                            $tx->date
+                            $this->costForTransaction($tx),
+                            $tx->date,
+                            'transaction',
+                            null,
+                            $this->costStatusForTransaction($tx),
                         );
                     }
                 }
@@ -297,25 +302,35 @@ class FifoCalculatorService
 
     private function processEntrada(array &$lots, Transaction $tx): void
     {
-        $asset   = $tx->to_asset ?? $tx->from_asset;
-        $qty     = (float) ($tx->to_amount ?? $tx->from_amount ?? 0);
-        $costBrl = (float) ($tx->total_brl ?? 0);
+        $asset      = $tx->to_asset ?? $tx->from_asset;
+        $qty        = (float) ($tx->to_amount ?? $tx->from_amount ?? 0);
+        $costStatus = $this->costStatusForTransaction($tx);
+        $costBrl    = $this->costForTransaction($tx);
 
         if (!$asset || $qty <= 0) {
             return;
         }
 
-        $this->processEntradaAsset($lots, $asset, $qty, $costBrl, $tx->date);
+        // Uma entrada pode ter a quantidade confirmada sem ter custo fiscal
+        // comprovado. Ela só poderá participar de resultado fiscal quando o
+        // custo estiver explicitamente marcado como conhecido.
+        $tx->forceFill([
+            'quantity_status' => FifoInventoryGap::QUANTITY_COMPLETE,
+            'cost_status' => $costStatus,
+        ])->saveQuietly();
+
+        $this->processEntradaAsset($lots, $asset, $qty, $costBrl, $tx->date, 'transaction', null, $costStatus);
     }
 
     private function processEntradaAsset(
         array &$lots,
         string $asset,
         float $qty,
-        float $costBrl,
+        ?float $costBrl,
         $date,
         string $source = 'transaction',
-        ?int $openingBalanceId = null
+        ?int $openingBalanceId = null,
+        string $costStatus = FifoInventoryGap::COST_KNOWN,
     ): void {
         $asset = strtoupper(trim($asset));
 
@@ -326,6 +341,7 @@ class FifoCalculatorService
         $lots[$asset][] = [
             'qty'                => $qty,
             'cost_brl'           => $costBrl,
+            'cost_status'        => $costStatus,
             'date'               => $date instanceof \Carbon\Carbon ? $date->toDateTimeString() : (string) $date,
             'source'             => $source,
             'opening_balance_id' => $openingBalanceId,
@@ -381,6 +397,7 @@ class FifoCalculatorService
         $asset = strtoupper(trim($asset));
         $consumedLots = [];
         $costBasisBrl = 0.0;
+        $pendingCostQuantity = 0.0;
         $remaining    = $qty;
         $availableQuantity = collect($lots[$asset] ?? [])->sum(fn (array $lot) => (float) $lot['qty']);
 
@@ -391,20 +408,27 @@ class FifoCalculatorService
                 }
 
                 $consume      = min($lot['qty'], $remaining);
-                $lotCostUnit  = $lot['qty'] > 0 ? ($lot['cost_brl'] / $lot['qty']) : 0;
-                $consumedCost = $consume * $lotCostUnit;
+                $hasKnownCost = ($lot['cost_status'] ?? FifoInventoryGap::COST_KNOWN) === FifoInventoryGap::COST_KNOWN
+                    && $lot['cost_brl'] !== null;
+                $lotCostUnit  = $hasKnownCost && $lot['qty'] > 0 ? ($lot['cost_brl'] / $lot['qty']) : null;
+                $consumedCost = $lotCostUnit !== null ? $consume * $lotCostUnit : null;
 
                 $consumedLots[] = [
                     'lot_date'           => $lot['date'],
                     'lot_qty'            => round($consume, 10),
-                    'lot_cost_brl'       => round($consumedCost, 10),
+                    'lot_cost_brl'       => $consumedCost !== null ? round($consumedCost, 10) : null,
+                    'cost_status'        => $hasKnownCost ? FifoInventoryGap::COST_KNOWN : FifoInventoryGap::COST_PENDING,
                     'lot_source'         => $lot['source'] ?? 'transaction',
                     'opening_balance_id' => $lot['opening_balance_id'] ?? null,
                 ];
 
-                $costBasisBrl    += $consumedCost;
+                if ($consumedCost !== null) {
+                    $costBasisBrl += $consumedCost;
+                    $lot['cost_brl'] -= $consumedCost;
+                } else {
+                    $pendingCostQuantity += $consume;
+                }
                 $lot['qty']      -= $consume;
-                $lot['cost_brl'] -= $consumedCost;
                 $remaining       -= $consume;
 
                 if ($lot['qty'] <= 1e-10) {
@@ -415,16 +439,32 @@ class FifoCalculatorService
             $lots[$asset] = array_values($lots[$asset]);
         }
 
-        if ($remaining > 1e-10) {
-            $this->recordInventoryGap($tx, $asset, $qty, $availableQuantity, $remaining, $consumedLots, $costBasisBrl);
+        $quantityIncomplete = $remaining > 1e-10;
+        $costIncomplete = $pendingCostQuantity > 1e-10;
 
-            // O custo parcial é rastreado na pendência, mas não pode ser usado
-            // como custo integral ou para produzir lucro fiscal conclusivo.
+        if ($quantityIncomplete || $costIncomplete) {
+            $this->recordInventoryGap(
+                $tx,
+                $asset,
+                $qty,
+                $availableQuantity,
+                $remaining,
+                $pendingCostQuantity,
+                $consumedLots,
+                $costBasisBrl,
+            );
+
+            // A quantidade pode estar parcialmente ou totalmente identificada,
+            // mas nunca compõe ganho fiscal quando o custo não é comprovado.
             $tx->cost_basis_brl  = null;
             $tx->profit_loss_brl = null;
             $tx->fifo_lots       = json_encode($consumedLots);
             $tx->fifo_processed  = false;
             $tx->fifo_status     = 'incomplete';
+            $tx->quantity_status = $quantityIncomplete
+                ? FifoInventoryGap::QUANTITY_INCOMPLETE
+                : FifoInventoryGap::QUANTITY_COMPLETE;
+            $tx->cost_status     = FifoInventoryGap::COST_PENDING;
             $tx->saveQuietly();
 
             return [
@@ -442,6 +482,8 @@ class FifoCalculatorService
         $tx->fifo_lots       = json_encode($consumedLots);
         $tx->fifo_processed  = true;
         $tx->fifo_status     = 'complete';
+        $tx->quantity_status = FifoInventoryGap::QUANTITY_COMPLETE;
+        $tx->cost_status     = FifoInventoryGap::COST_KNOWN;
         $tx->saveQuietly();
 
         return [
@@ -458,6 +500,7 @@ class FifoCalculatorService
         float $requiredQuantity,
         float $availableQuantity,
         float $missingQuantity,
+        float $pendingCostQuantity,
         array $consumedLots,
         float $knownCostBrl,
     ): void {
@@ -471,13 +514,23 @@ class FifoCalculatorService
                 'required_quantity' => round($requiredQuantity, 12),
                 'available_quantity' => round($availableQuantity, 12),
                 'missing_quantity' => round($missingQuantity, 12),
+                'pending_cost_quantity' => round($pendingCostQuantity, 12),
                 'occurred_at' => $transaction->date,
                 'status' => FifoInventoryGap::STATUS_OPEN,
-                'reason' => 'insufficient_acquisition_history',
+                'quantity_status' => $missingQuantity > 1e-10
+                    ? FifoInventoryGap::QUANTITY_INCOMPLETE
+                    : FifoInventoryGap::QUANTITY_COMPLETE,
+                'cost_status' => ($missingQuantity > 1e-10 || $pendingCostQuantity > 1e-10)
+                    ? FifoInventoryGap::COST_PENDING
+                    : FifoInventoryGap::COST_KNOWN,
+                'reason' => $missingQuantity > 1e-10
+                    ? ($pendingCostQuantity > 1e-10 ? 'insufficient_quantity_and_pending_cost' : 'insufficient_acquisition_history')
+                    : 'pending_acquisition_cost',
                 'source' => $transaction->source_type,
                 'consumed_lots' => $consumedLots,
                 'context' => [
                     'known_cost_brl' => round($knownCostBrl, 10),
+                    'pending_cost_quantity' => round($pendingCostQuantity, 12),
                     'transaction_type' => $transaction->type,
                     'fifo_status' => 'incomplete',
                 ],
@@ -506,6 +559,28 @@ class FifoCalculatorService
             'status' => FifoInventoryGap::STATUS_RESOLVED,
             'resolved_at' => now(),
         ]);
+    }
+
+    private function costStatusForTransaction(Transaction $transaction): string
+    {
+        if (in_array($transaction->cost_status, [
+            FifoInventoryGap::COST_KNOWN,
+            FifoInventoryGap::COST_PENDING,
+            FifoInventoryGap::COST_UNAVAILABLE,
+        ], true)) {
+            return $transaction->cost_status;
+        }
+
+        return $transaction->total_brl !== null && (float) $transaction->total_brl > 0
+            ? FifoInventoryGap::COST_KNOWN
+            : FifoInventoryGap::COST_PENDING;
+    }
+
+    private function costForTransaction(Transaction $transaction): ?float
+    {
+        return $this->costStatusForTransaction($transaction) === FifoInventoryGap::COST_KNOWN
+            ? (float) $transaction->total_brl
+            : null;
     }
 
     private function updateMonthly(array &$monthly, Transaction $tx, array $result): void
