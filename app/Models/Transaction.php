@@ -36,6 +36,9 @@ class Transaction extends Model
         'quote_qty',
         'commission',
         'commission_asset',
+        'commission_value_brl',
+        'reconciliation_status',
+        'import_metadata',
         'side',
         'executed_at',
     ];
@@ -52,6 +55,8 @@ class Transaction extends Model
         'qty' => 'decimal:12',
         'quote_qty' => 'decimal:12',
         'commission' => 'decimal:12',
+        'commission_value_brl' => 'decimal:10',
+        'import_metadata' => 'array',
         'executed_at' => 'datetime',
     ];
 

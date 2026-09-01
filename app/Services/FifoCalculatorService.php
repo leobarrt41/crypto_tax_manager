@@ -15,9 +15,10 @@ use Illuminate\Support\Facades\Log;
  * Apura ganhos/perdas de capital pelo método FIFO para fins fiscais brasileiros.
  *
  * Regras implementadas:
- *  - buy / deposit / receive  => ENTRADA (acumula lote de custo)
- *  - sell / withdrawal / send => SAÍDA tributável (consome lotes FIFO)
+ *  - buy / deposit / receive  => ENTRADA (acumula lote de custo), salvo conciliação pendente
+ *  - sell / withdrawal / send => SAÍDA tributável (consome lotes FIFO), salvo conciliação pendente
  *  - trade / convert          => SAÍDA do from_asset + ENTRADA do to_asset
+ *  - transferências unilaterais importadas com conciliação pendente não recebem efeito fiscal automático
  *
  * Idempotência: zera os campos fiscais antes de recalcular, garantindo
  * que múltiplas execuções produzam o mesmo resultado.
@@ -153,6 +154,13 @@ class FifoCalculatorService
 
             // ── 7. Processar cada transação ─────────────────────────────────────
             foreach ($transactions as $tx) {
+                // Movimentações de uma perna vindas do CSV anual podem ser
+                // transferências entre carteiras próprias. Sem conciliação,
+                // não criamos custo de aquisição nem alienação tributável.
+                if ($tx->reconciliation_status === 'pending_transfer_reconciliation') {
+                    continue;
+                }
+
                 $type = strtolower(trim($tx->type ?? ''));
 
                 if (in_array($type, self::ENTRADA_TYPES)) {
