@@ -112,7 +112,20 @@
           </Link>
         </li>
 
-        <li class="px-3 pt-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">Operações</li>
+        <li>
+          <Link
+            href="/trading-bot/paper-trading"
+            class="nav-item flex items-center p-3 rounded-lg transition-colors"
+            :class="isActive('/trading-bot/paper-trading') ? 'bg-primary text-white' : 'text-gray-700 hover:bg-gray-100'"
+          >
+            <svg class="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-2.21 0-4 1.343-4 3s1.79 3 4 3 4 1.343 4 3-1.79 3-4 3m0-12V6m0 14v-2m0-6h.01M6 12h.01M18 12h.01"></path>
+            </svg>
+            Paper trading manual
+          </Link>
+        </li>
+
+        <li class="px-3 pt-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">Registros legados</li>
 
         <li class="nav-item flex items-center py-2 pl-11 pr-3 rounded-lg text-sm text-gray-400 cursor-not-allowed" title="Página ainda não disponível">
           <span>Criar Operação</span>

@@ -18,6 +18,7 @@ use App\Http\Controllers\NotificationController;
 use App\Http\Controllers\TradingBotController;
 use App\Http\Controllers\StrategyDefinitionController;
 use App\Http\Controllers\BacktestController;
+use App\Http\Controllers\PaperTradingController;
 use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
@@ -162,6 +163,16 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::post('/', [BacktestController::class, 'store'])->name('store');
             Route::get('/{backtest}', [BacktestController::class, 'show'])->name('show');
             Route::delete('/{backtest}', [BacktestController::class, 'destroy'])->name('destroy');
+        });
+        Route::prefix('paper-trading')->name('paper-trading.')->group(function () {
+            Route::get('/', [PaperTradingController::class, 'index'])->name('index');
+            Route::get('/create', [PaperTradingController::class, 'create'])->name('create');
+            Route::post('/', [PaperTradingController::class, 'store'])->name('store');
+            Route::get('/{session}', [PaperTradingController::class, 'show'])->name('show');
+            Route::post('/{session}/run', [PaperTradingController::class, 'run'])->name('run');
+            Route::post('/{session}/pause', [PaperTradingController::class, 'pause'])->name('pause');
+            Route::post('/{session}/resume', [PaperTradingController::class, 'resume'])->name('resume');
+            Route::post('/{session}/archive', [PaperTradingController::class, 'archive'])->name('archive');
         });
     });
 
