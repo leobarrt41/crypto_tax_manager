@@ -105,6 +105,60 @@ class FifoInventoryGapTest extends TestCase
             ->assertJsonPath('fifo_status', 'incomplete');
     }
 
+    public function test_convert_keeps_received_acquisition_cost_independent_from_pending_disposal_cost(): void
+    {
+        $user = User::factory()->create(['email_verified_at' => now()]);
+        $this->transaction($user, 'asset_dividend', null, null, 'DENT', 100, '2022-01-01 09:00:00', null, [
+            'cost_status' => FifoInventoryGap::COST_PENDING,
+            'quantity_status' => FifoInventoryGap::QUANTITY_COMPLETE,
+        ]);
+        $convert = $this->transaction($user, 'convert', 'DENT', 100, 'XRP', 50, '2022-01-02 09:00:00', 300, [
+            'import_metadata' => [
+                'brl_values' => [
+                    'sent_value_brl' => 300,
+                    'received_value_brl' => 320,
+                    'selected_source' => 'sent_value_brl',
+                ],
+            ],
+        ]);
+        $sale = $this->transaction($user, 'sell', 'XRP', 50, 'BRL', 500, '2022-01-03 09:00:00', 500);
+
+        app(FifoCalculatorService::class)->recalculateForUser($user->id);
+
+        $this->assertSame(FifoInventoryGap::COST_PENDING, $convert->fresh()->from_cost_status);
+        $this->assertSame(FifoInventoryGap::COST_KNOWN, $convert->fresh()->to_cost_status);
+        $this->assertSame('binance_annual_csv_received_value_brl', $convert->fresh()->to_cost_evidence_type);
+        $this->assertSame(320.0, (float) $convert->fresh()->to_cost_basis_brl);
+        $this->assertNull($convert->fresh()->cost_status);
+        $this->assertSame('complete', $sale->fresh()->fifo_status);
+        $this->assertSame(320.0, (float) $sale->fresh()->cost_basis_brl);
+        $this->assertSame(180.0, (float) $sale->fresh()->profit_loss_brl);
+        $this->assertDatabaseCount('fifo_inventory_gaps', 1);
+        $this->assertSame($convert->id, FifoInventoryGap::query()->sole()->transaction_id);
+    }
+
+    public function test_convert_market_quote_is_not_promoted_to_documented_acquisition_cost(): void
+    {
+        $user = User::factory()->create(['email_verified_at' => now()]);
+        $this->transaction($user, 'buy', 'BRL', 200, 'DENT', 100, '2022-01-01 09:00:00', 200);
+        $convert = $this->transaction($user, 'convert', 'DENT', 100, 'XRP', 50, '2022-01-02 09:00:00', 300, [
+            'pricing_status' => 'completed',
+        ]);
+        $sale = $this->transaction($user, 'sell', 'XRP', 50, 'BRL', 500, '2022-01-03 09:00:00', 500);
+
+        app(FifoCalculatorService::class)->recalculateForUser($user->id);
+
+        $this->assertSame(FifoInventoryGap::COST_KNOWN, $convert->fresh()->from_cost_status);
+        $this->assertSame(FifoInventoryGap::COST_ESTIMATED, $convert->fresh()->to_cost_status);
+        $this->assertSame('historical_market_quote', $convert->fresh()->to_cost_evidence_type);
+        $gap = FifoInventoryGap::query()->sole();
+        $this->assertSame($sale->id, $gap->transaction_id);
+        $this->assertSame(FifoInventoryGap::QUANTITY_COMPLETE, $gap->quantity_status);
+        $this->assertSame(FifoInventoryGap::COST_PENDING, $gap->cost_status);
+        $this->assertNull($sale->fresh()->cost_basis_brl);
+        $this->assertNull($sale->fresh()->profit_loss_brl);
+    }
+
     public function test_credit_after_sale_does_not_resolve_the_prior_fifo_gap(): void
     {
         $user = User::factory()->create(['email_verified_at' => now()]);
@@ -156,6 +210,8 @@ class FifoInventoryGapTest extends TestCase
             ->assertJsonPath('status', 'incomplete')
             ->assertJsonPath('is_official_export_available', false)
             ->assertJsonPath('open_gaps_count', 1)
+            ->assertJsonPath('quantity_missing_count', 1)
+            ->assertJsonPath('cost_pending_count', 0)
             ->assertJsonPath('gaps.0.asset', 'ETH')
             ->assertJsonPath('gaps.0.transaction.id', 1);
 
@@ -174,6 +230,32 @@ class FifoInventoryGapTest extends TestCase
             ->assertOk()
             ->assertJsonPath('status', 'complete')
             ->assertJsonPath('open_gaps_count', 0);
+    }
+
+    public function test_acquisition_history_counts_missing_quantity_and_pending_cost_separately(): void
+    {
+        $user = User::factory()->create(['email_verified_at' => now()]);
+        $this->transaction($user, 'sell', 'ETH', 1, 'BRL', 10000, '2022-03-05 09:00:00', 10000);
+        $this->transaction($user, 'asset_dividend', null, null, 'DENT', 10, '2022-03-01 09:00:00', null, [
+            'cost_status' => FifoInventoryGap::COST_PENDING,
+            'quantity_status' => FifoInventoryGap::QUANTITY_COMPLETE,
+        ]);
+        $this->transaction($user, 'sell', 'DENT', 10, 'BRL', 300, '2022-03-06 09:00:00', 300);
+
+        app(FifoCalculatorService::class)->recalculateForUser($user->id);
+
+        $this->actingAs($user)
+            ->getJson(route('reports.relatorio-ir.acquisition-history', ['year' => 2022]))
+            ->assertOk()
+            ->assertJsonPath('open_gaps_count', 2)
+            ->assertJsonPath('quantity_missing_count', 1)
+            ->assertJsonPath('cost_pending_count', 1);
+
+        $this->actingAs($user)
+            ->get(route('reports.relatorio-ir.export-csv', ['year' => 2022]))
+            ->assertStatus(422)
+            ->assertJsonPath('quantity_missing_count', 1)
+            ->assertJsonPath('cost_pending_count', 1);
     }
 
     public function test_manual_history_correction_requires_confirmation_when_an_acquisition_already_exists(): void
