@@ -17,6 +17,7 @@ class FifoInventoryGap extends Model
     public const QUANTITY_INCOMPLETE = 'incomplete';
 
     public const COST_KNOWN = 'known';
+    public const COST_ESTIMATED = 'estimated';
     public const COST_PENDING = 'pending';
     public const COST_UNAVAILABLE = 'unavailable';
 

@@ -67,11 +67,24 @@ class FifoAcquisitionHistoryService
             ])
             ->values();
 
+        $quantityMissingCount = $gaps
+            ->filter(fn (array $gap): bool => $gap['quantity_status'] !== FifoInventoryGap::QUANTITY_COMPLETE)
+            ->count();
+        $costPendingCount = $gaps
+            ->filter(fn (array $gap): bool => $gap['quantity_status'] === FifoInventoryGap::QUANTITY_COMPLETE
+                && $gap['cost_status'] !== FifoInventoryGap::COST_KNOWN)
+            ->count();
+
         return [
             'year' => $year,
             'status' => $gaps->isEmpty() ? 'complete' : 'incomplete',
             'is_official_export_available' => $gaps->isEmpty(),
+            // Mantido para consumidores existentes; a interface nova deve usar
+            // as contagens separadas, que não podem ser somadas como se fossem
+            // a mesma pendência.
             'open_gaps_count' => $gaps->count(),
+            'quantity_missing_count' => $quantityMissingCount,
+            'cost_pending_count' => $costPendingCount,
             'gaps' => $gaps,
             'coverage' => $coverage,
             'manual_correction_warning' => 'Use a correção manual somente quando a aquisição não estiver nas transações importadas. Cadastrar novamente um ativo já reconstruído pode duplicar os lotes FIFO.',

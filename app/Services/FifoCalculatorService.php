@@ -125,6 +125,13 @@ class FifoCalculatorService
                 'fifo_status'     => null,
                 'quantity_status' => null,
                 'cost_status'     => null,
+                'from_quantity_status' => null,
+                'from_cost_status' => null,
+                'from_cost_evidence_type' => null,
+                'to_quantity_status' => null,
+                'to_cost_status' => null,
+                'to_cost_evidence_type' => null,
+                'to_cost_basis_brl' => null,
             ]);
 
             // ── 3. Zerar resumos mensais no mesmo escopo ────────────────────────
@@ -184,6 +191,11 @@ class FifoCalculatorService
                     }
 
                 } elseif (in_array($type, self::CONVERT_TYPES)) {
+                    // A conversão possui duas pernas fiscais independentes. A
+                    // evidência da aquisição é capturada antes de processar a
+                    // alienação, pois esta pode ter custo FIFO pendente.
+                    $acquisitionLeg = $this->resolveConvertAcquisitionLeg($tx);
+
                     // Saída do from_asset
                     if ($tx->from_asset && $tx->from_amount > 0) {
                         $result = $this->processSaidaAsset(
@@ -201,17 +213,26 @@ class FifoCalculatorService
                             $stats['saidas_processed']++;
                         }
                     }
-                    // Entrada do to_asset
+                    // Entrada do to_asset. Nunca reutiliza o status de custo
+                    // da alienação: o valor recebido deve ter sua própria
+                    // evidência documental ou estimativa identificada.
                     if ($tx->to_asset && $tx->to_amount > 0) {
+                        $tx->forceFill([
+                            'to_quantity_status' => FifoInventoryGap::QUANTITY_COMPLETE,
+                            'to_cost_status' => $acquisitionLeg['cost_status'],
+                            'to_cost_evidence_type' => $acquisitionLeg['evidence_type'],
+                            'to_cost_basis_brl' => $acquisitionLeg['cost_brl'],
+                        ])->saveQuietly();
+
                         $this->processEntradaAsset(
                             $lots,
                             $tx->to_asset,
                             (float) $tx->to_amount,
-                            $this->costForTransaction($tx),
+                            $acquisitionLeg['cost_brl'],
                             $tx->date,
                             'transaction',
                             null,
-                            $this->costStatusForTransaction($tx),
+                            $acquisitionLeg['cost_status'],
                         );
                     }
                 }
@@ -461,10 +482,7 @@ class FifoCalculatorService
             $tx->fifo_lots       = json_encode($consumedLots);
             $tx->fifo_processed  = false;
             $tx->fifo_status     = 'incomplete';
-            $tx->quantity_status = $quantityIncomplete
-                ? FifoInventoryGap::QUANTITY_INCOMPLETE
-                : FifoInventoryGap::QUANTITY_COMPLETE;
-            $tx->cost_status     = FifoInventoryGap::COST_PENDING;
+            $this->applyDisposalCompleteness($tx, $quantityIncomplete, true);
             $tx->saveQuietly();
 
             return [
@@ -482,8 +500,7 @@ class FifoCalculatorService
         $tx->fifo_lots       = json_encode($consumedLots);
         $tx->fifo_processed  = true;
         $tx->fifo_status     = 'complete';
-        $tx->quantity_status = FifoInventoryGap::QUANTITY_COMPLETE;
-        $tx->cost_status     = FifoInventoryGap::COST_KNOWN;
+        $this->applyDisposalCompleteness($tx, false, false);
         $tx->saveQuietly();
 
         return [
@@ -561,10 +578,82 @@ class FifoCalculatorService
         ]);
     }
 
+    /**
+     * Atualiza exclusivamente a perna de alienação da conversão. Campos
+     * legados continuam sendo usados apenas por operações de uma perna.
+     */
+    private function applyDisposalCompleteness(Transaction $transaction, bool $quantityIncomplete, bool $costIncomplete): void
+    {
+        $quantityStatus = $quantityIncomplete
+            ? FifoInventoryGap::QUANTITY_INCOMPLETE
+            : FifoInventoryGap::QUANTITY_COMPLETE;
+        $costStatus = $costIncomplete
+            ? FifoInventoryGap::COST_PENDING
+            : FifoInventoryGap::COST_KNOWN;
+
+        if (in_array(strtolower((string) $transaction->type), self::CONVERT_TYPES, true)) {
+            $transaction->from_quantity_status = $quantityStatus;
+            $transaction->from_cost_status = $costStatus;
+            $transaction->from_cost_evidence_type = $costIncomplete ? null : 'fifo_consumed_lots';
+            // Um único cost_status não descreve corretamente as duas pernas.
+            $transaction->quantity_status = null;
+            $transaction->cost_status = null;
+            $transaction->cost_evidence_type = null;
+
+            return;
+        }
+
+        $transaction->quantity_status = $quantityStatus;
+        $transaction->cost_status = $costStatus;
+        $transaction->cost_evidence_type = $costIncomplete ? null : 'fifo_consumed_lots';
+    }
+
+    /** @return array{cost_brl: ?float, cost_status: string, evidence_type: ?string} */
+    private function resolveConvertAcquisitionLeg(Transaction $transaction): array
+    {
+        $metadata = is_array($transaction->import_metadata) ? $transaction->import_metadata : [];
+        $brlValues = is_array($metadata['brl_values'] ?? null) ? $metadata['brl_values'] : [];
+        $receivedValue = $brlValues['received_value_brl'] ?? null;
+
+        if (is_numeric($receivedValue) && (float) $receivedValue > 0) {
+            return [
+                'cost_brl' => (float) $receivedValue,
+                'cost_status' => FifoInventoryGap::COST_KNOWN,
+                'evidence_type' => 'binance_annual_csv_received_value_brl',
+            ];
+        }
+
+        $fromAsset = strtoupper((string) $transaction->from_asset);
+        $fromAmount = (float) ($transaction->from_amount ?? 0);
+        if ($fromAsset === 'BRL' && $fromAmount > 0) {
+            return [
+                'cost_brl' => $fromAmount,
+                'cost_status' => FifoInventoryGap::COST_KNOWN,
+                'evidence_type' => 'binance_convert_brl_paid',
+            ];
+        }
+
+        $totalBrl = (float) ($transaction->total_brl ?? 0);
+        if ($totalBrl > 0 && $transaction->pricing_status === 'completed') {
+            return [
+                'cost_brl' => $totalBrl,
+                'cost_status' => FifoInventoryGap::COST_ESTIMATED,
+                'evidence_type' => 'historical_market_quote',
+            ];
+        }
+
+        return [
+            'cost_brl' => null,
+            'cost_status' => FifoInventoryGap::COST_PENDING,
+            'evidence_type' => null,
+        ];
+    }
+
     private function costStatusForTransaction(Transaction $transaction): string
     {
         if (in_array($transaction->cost_status, [
             FifoInventoryGap::COST_KNOWN,
+            FifoInventoryGap::COST_ESTIMATED,
             FifoInventoryGap::COST_PENDING,
             FifoInventoryGap::COST_UNAVAILABLE,
         ], true)) {

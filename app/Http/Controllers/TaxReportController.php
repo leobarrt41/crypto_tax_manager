@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\TaxMonthlySummary;
 use App\Models\FifoOpeningBalance;
+use App\Models\FifoInventoryGap;
 use App\Models\Transaction;
 use App\Services\FifoCalculatorService;
 use App\Services\FifoAcquisitionHistoryService;
@@ -305,10 +306,30 @@ class TaxReportController extends Controller
         $month = $request->month ? (int) $request->month : null;
 
         if ($this->acquisitionHistory->hasOpenGaps($user->id, $year, $month)) {
+            $history = $this->acquisitionHistory->forYear($user, $year);
+            $relevantGaps = collect($history['gaps'])
+                ->filter(function (array $gap) use ($month): bool {
+                    if ($month === null || empty($gap['occurred_at'])) {
+                        return true;
+                    }
+
+                    return (int) \Carbon\Carbon::parse($gap['occurred_at'])->format('n') === $month;
+                })
+                ->values();
+            $quantityMissingCount = $relevantGaps
+                ->filter(fn (array $gap): bool => $gap['quantity_status'] !== FifoInventoryGap::QUANTITY_COMPLETE)
+                ->count();
+            $costPendingCount = $relevantGaps
+                ->filter(fn (array $gap): bool => $gap['quantity_status'] === FifoInventoryGap::QUANTITY_COMPLETE
+                    && $gap['cost_status'] !== FifoInventoryGap::COST_KNOWN)
+                ->count();
+
             return response()->json([
-                'message' => 'A exportação oficial está indisponível porque há operações anteriores ausentes no histórico de aquisição. Importe os CSVs anteriores ou concilie as pendências antes de exportar.',
+                'message' => 'A exportação oficial está indisponível porque o histórico de aquisição contém quantidade anterior ausente e/ou custo de aquisição pendente. Importe documentos anteriores ou concilie as pendências antes de exportar.',
                 'fifo_status' => 'incomplete',
-                'open_gaps_count' => $this->acquisitionHistory->openGapsCount($user->id, $year, $month),
+                'open_gaps_count' => $relevantGaps->count(),
+                'quantity_missing_count' => $quantityMissingCount,
+                'cost_pending_count' => $costPendingCount,
             ], 422);
         }
 

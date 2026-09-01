@@ -107,15 +107,20 @@
                 Histórico completo para as saídas registradas em {{ filters.year }}. O relatório fiscal pode ser exportado.
               </p>
               <p v-else class="mt-1 text-sm leading-6 text-amber-950 dark:text-amber-100">
-                <strong>FIFO incompleto.</strong> Encontramos uma venda sem compras anteriores suficientes para identificar o custo de compra. Importe seus arquivos CSV anteriores para completar o histórico.
+                <strong>Histórico de aquisição incompleto.</strong> {{ incompleteHistoryMessage }}
               </p>
             </div>
-            <span class="inline-flex w-fit items-center rounded-full px-3 py-1 text-sm font-medium"
-                  :class="acquisitionHistory.status === 'complete'
-                    ? 'bg-green-100 text-green-800 dark:bg-emerald-500/20 dark:text-emerald-200'
-                    : 'bg-amber-100 text-amber-950 dark:bg-amber-300 dark:text-amber-950'">
-              {{ acquisitionHistory.status === 'complete' ? 'Histórico completo' : `${acquisitionHistory.open_gaps_count} pendência(s)` }}
-            </span>
+            <div v-if="acquisitionHistory.status === 'complete'" class="inline-flex w-fit items-center rounded-full bg-green-100 px-3 py-1 text-sm font-medium text-green-800 dark:bg-emerald-500/20 dark:text-emerald-200">
+              Histórico completo
+            </div>
+            <div v-else class="flex flex-wrap gap-2">
+              <span v-if="quantityMissingCount > 0" class="inline-flex w-fit items-center rounded-full bg-amber-100 px-3 py-1 text-sm font-medium text-amber-950 dark:bg-amber-300 dark:text-amber-950">
+                {{ quantityMissingCount }} {{ quantityMissingCount === 1 ? 'operação ausente' : 'operações ausentes' }}
+              </span>
+              <span v-if="costPendingCount > 0" class="inline-flex w-fit items-center rounded-full bg-orange-100 px-3 py-1 text-sm font-medium text-orange-950 dark:bg-orange-300 dark:text-orange-950">
+                {{ costPendingCount }} {{ costPendingCount === 1 ? 'custo pendente' : 'custos pendentes' }}
+              </span>
+            </div>
           </div>
 
           <template v-if="!loadingAcquisitionHistory && acquisitionHistory.status !== 'complete'">
@@ -134,9 +139,9 @@
                   <tr v-for="gap in acquisitionHistory.gaps" :key="gap.id" class="dark:hover:bg-slate-800/70">
                     <td class="px-4 py-3 text-sm font-semibold text-gray-900 dark:text-white">{{ gap.asset }}</td>
                     <td class="px-4 py-3 text-sm text-gray-700 dark:text-slate-200">{{ formatDate(gap.occurred_at) }}</td>
-                    <td class="px-4 py-3 text-right text-sm text-gray-700 dark:text-slate-200">{{ formatQuantity(gap.missing_quantity) }}</td>
+                    <td class="px-4 py-3 text-right text-sm text-gray-700 dark:text-slate-200">{{ Number(gap.missing_quantity) > 0 ? formatQuantity(gap.missing_quantity) : '—' }}</td>
                     <td class="px-4 py-3 text-sm text-gray-700 dark:text-slate-200">#{{ gap.transaction?.id }} · {{ gap.transaction?.type || 'Saída' }}</td>
-                    <td class="px-4 py-3 text-sm font-semibold text-amber-950 dark:text-amber-200">Operações anteriores ausentes</td>
+                    <td class="px-4 py-3 text-sm font-semibold text-amber-950 dark:text-amber-200">{{ gapSituationLabel(gap) }}</td>
                   </tr>
                 </tbody>
               </table>
@@ -331,7 +336,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, watch } from 'vue'
+import { computed, ref, reactive, watch } from 'vue'
 import { Link } from '@inertiajs/vue3'
 import AppLayout from '@/Layouts/AppLayout.vue'
 
@@ -368,8 +373,28 @@ const acquisitionHistory = ref({
   status: 'complete',
   is_official_export_available: true,
   open_gaps_count: 0,
+  quantity_missing_count: 0,
+  cost_pending_count: 0,
   gaps: [],
   coverage: [],
+})
+const quantityMissingCount = computed(() => Number(acquisitionHistory.value.quantity_missing_count ?? 0))
+const costPendingCount = computed(() => Number(acquisitionHistory.value.cost_pending_count ?? 0))
+const incompleteHistoryMessage = computed(() => {
+  const quantity = quantityMissingCount.value
+  const cost = costPendingCount.value
+
+  if (quantity > 0 && cost > 0) {
+    return `${quantity} ${quantity === 1 ? 'operação está' : 'operações estão'} sem quantidade anterior suficiente e ${cost} ${cost === 1 ? 'possui' : 'possuem'} quantidade localizada, mas custo ainda pendente.`
+  }
+  if (quantity > 0) {
+    return `${quantity} ${quantity === 1 ? 'operação está' : 'operações estão'} sem quantidade anterior suficiente.`
+  }
+  if (cost > 0) {
+    return `${cost} ${cost === 1 ? 'operação possui' : 'operações possuem'} quantidade localizada, mas custo ainda pendente.`
+  }
+
+  return 'Há pendências de histórico que precisam de revisão antes da exportação fiscal oficial.'
 })
 const confirmManualCorrection = ref(false)
 const openingBalanceForm = reactive({
@@ -438,7 +463,7 @@ async function loadSummary() {
 
 async function loadAcquisitionHistory() {
   if (!filters.year) {
-    acquisitionHistory.value = { status: 'complete', is_official_export_available: true, open_gaps_count: 0, gaps: [], coverage: [] }
+    acquisitionHistory.value = { status: 'complete', is_official_export_available: true, open_gaps_count: 0, quantity_missing_count: 0, cost_pending_count: 0, gaps: [], coverage: [] }
     return
   }
 
@@ -452,7 +477,7 @@ async function loadAcquisitionHistory() {
     if (!res.ok) throw new Error(data.message ?? 'Erro ao verificar o histórico de aquisição.')
     acquisitionHistory.value = data
   } catch (err) {
-    acquisitionHistory.value = { status: 'incomplete', is_official_export_available: false, open_gaps_count: 0, gaps: [], coverage: [] }
+    acquisitionHistory.value = { status: 'incomplete', is_official_export_available: false, open_gaps_count: 0, quantity_missing_count: 0, cost_pending_count: 0, gaps: [], coverage: [] }
     showFeedback(err.message, 'error')
   } finally {
     loadingAcquisitionHistory.value = false
@@ -617,6 +642,18 @@ async function exportarCsv() {
   } catch (err) {
     showFeedback(err.message, 'error')
   }
+}
+
+function gapSituationLabel(gap) {
+  if (gap.quantity_status !== 'complete') {
+    return gap.cost_status !== 'known'
+      ? 'Quantidade e custo pendentes'
+      : 'Operações anteriores ausentes'
+  }
+
+  return gap.cost_status !== 'known'
+    ? 'Custo de aquisição pendente'
+    : 'Histórico completo'
 }
 
 function getCsrfToken() {
