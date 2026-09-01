@@ -135,6 +135,14 @@ class User extends Authenticatable
         return $this->hasMany(PaperTradingSession::class);
     }
 
+    /**
+     * Pendências de histórico de aquisição detectadas pelo recálculo FIFO.
+     */
+    public function fifoInventoryGaps(): HasMany
+    {
+        return $this->hasMany(FifoInventoryGap::class);
+    }
+
     public function exchangeKeys()
 {
     return $this->hasMany(UserApiKey::class);

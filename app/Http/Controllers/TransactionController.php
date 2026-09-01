@@ -194,10 +194,12 @@ public function index(Request $request)
         try {
             $transaction = Transaction::create($data);
 
-            // Se for uma operação de saída, chama o serviço de cálculo FIFO.
-            if ($data['operation'] === 'saida') {
-                app(FifoCalculatorService::class)->calculateFor($transaction);
-            }
+            // O recálculo moderno reconstitui todos os lotes em ordem cronológica
+            // e registra lacunas de histórico quando uma saída não tiver custo suficiente.
+            app(FifoCalculatorService::class)->recalculateForUser(
+                $transaction->user_id,
+                (int) Carbon::parse($transaction->date)->year,
+            );
 
             return redirect()->route('transactions.index')
                 ->with('success', 'Transação cadastrada com sucesso!');
@@ -268,10 +270,12 @@ public function index(Request $request)
         try {
             $transaction->update($data);
 
-            // Se a operação foi alterada para saída, recalcula o FIFO.
-            if ($data['operation'] === 'saida') {
-                app(FifoCalculatorService::class)->calculateFor($transaction);
-            }
+            // Reconstitui o FIFO pelo caminho moderno após qualquer alteração,
+            // inclusive para resolver ou abrir pendências de histórico de aquisição.
+            app(FifoCalculatorService::class)->recalculateForUser(
+                $transaction->user_id,
+                (int) Carbon::parse($transaction->date)->year,
+            );
             
             return redirect()->route('transactions.index')
                 ->with('success', 'Transação atualizada com sucesso!');

@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Transaction;
 use App\Models\TaxMonthlySummary;
 use App\Models\FifoOpeningBalance;
+use App\Models\FifoInventoryGap;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -121,6 +122,7 @@ class FifoCalculatorService
                 'profit_loss_brl' => null,
                 'fifo_lots'       => null,
                 'fifo_processed'  => false,
+                'fifo_status'     => null,
             ]);
 
             // ── 3. Zerar resumos mensais no mesmo escopo ────────────────────────
@@ -141,6 +143,8 @@ class FifoCalculatorService
                 'saidas_processed'    => 0,
                 'opening_lots_loaded' => $openingBalances->count(),
                 'recalculated_from_year' => $startYear,
+                'fifo_gaps_open' => 0,
+                'fifo_gaps_resolved' => 0,
             ];
 
             // ── 5. Estrutura de lotes FIFO por ativo ────────────────────────────
@@ -153,6 +157,7 @@ class FifoCalculatorService
             $monthly = [];
 
             // ── 7. Processar cada transação ─────────────────────────────────────
+            $detectedGapTransactionIds = [];
             foreach ($transactions as $tx) {
                 // Movimentações de uma perna vindas do CSV anual podem ser
                 // transferências entre carteiras próprias. Sem conciliação,
@@ -168,8 +173,13 @@ class FifoCalculatorService
 
                 } elseif (in_array($type, self::SAIDA_TYPES)) {
                     $result = $this->processSaida($lots, $tx);
-                    $this->updateMonthly($monthly, $tx, $result);
-                    $stats['saidas_processed']++;
+                    if ($result['is_incomplete'] ?? false) {
+                        $detectedGapTransactionIds[] = $tx->id;
+                        $stats['fifo_gaps_open']++;
+                    } else {
+                        $this->updateMonthly($monthly, $tx, $result);
+                        $stats['saidas_processed']++;
+                    }
 
                 } elseif (in_array($type, self::CONVERT_TYPES)) {
                     // Saída do from_asset
@@ -181,8 +191,13 @@ class FifoCalculatorService
                             (float) $tx->from_amount,
                             (float) ($tx->total_brl ?? 0)
                         );
-                        $this->updateMonthly($monthly, $tx, $result);
-                        $stats['saidas_processed']++;
+                        if ($result['is_incomplete'] ?? false) {
+                            $detectedGapTransactionIds[] = $tx->id;
+                            $stats['fifo_gaps_open']++;
+                        } else {
+                            $this->updateMonthly($monthly, $tx, $result);
+                            $stats['saidas_processed']++;
+                        }
                     }
                     // Entrada do to_asset
                     if ($tx->to_asset && $tx->to_amount > 0) {
@@ -198,7 +213,14 @@ class FifoCalculatorService
                 // Tipos desconhecidos são ignorados silenciosamente
             }
 
-            // ── 8. Persistir resumos mensais ─────────────────────────────────────
+            // ── 8. Resolver somente lacunas deste escopo que não persistirem ───────
+            $stats['fifo_gaps_resolved'] = $this->resolveRecoveredGaps(
+                $userId,
+                $transactions->pluck('id')->all(),
+                $detectedGapTransactionIds,
+            );
+
+            // ── 9. Persistir resumos mensais ─────────────────────────────────────
             $this->persistMonthly($userId, $monthly);
 
             return $stats;
@@ -356,9 +378,11 @@ class FifoCalculatorService
         float $qty,
         float $totalBrl
     ): array {
+        $asset = strtoupper(trim($asset));
         $consumedLots = [];
         $costBasisBrl = 0.0;
         $remaining    = $qty;
+        $availableQuantity = collect($lots[$asset] ?? [])->sum(fn (array $lot) => (float) $lot['qty']);
 
         if (isset($lots[$asset])) {
             foreach ($lots[$asset] as $i => &$lot) {
@@ -391,19 +415,97 @@ class FifoCalculatorService
             $lots[$asset] = array_values($lots[$asset]);
         }
 
+        if ($remaining > 1e-10) {
+            $this->recordInventoryGap($tx, $asset, $qty, $availableQuantity, $remaining, $consumedLots, $costBasisBrl);
+
+            // O custo parcial é rastreado na pendência, mas não pode ser usado
+            // como custo integral ou para produzir lucro fiscal conclusivo.
+            $tx->cost_basis_brl  = null;
+            $tx->profit_loss_brl = null;
+            $tx->fifo_lots       = json_encode($consumedLots);
+            $tx->fifo_processed  = false;
+            $tx->fifo_status     = 'incomplete';
+            $tx->saveQuietly();
+
+            return [
+                'cost_basis_brl' => null,
+                'profit_loss_brl' => null,
+                'fifo_lots' => $consumedLots,
+                'is_incomplete' => true,
+            ];
+        }
+
         $profitLossBrl = $totalBrl - $costBasisBrl;
 
         $tx->cost_basis_brl  = round($costBasisBrl, 10);
         $tx->profit_loss_brl = round($profitLossBrl, 10);
         $tx->fifo_lots       = json_encode($consumedLots);
         $tx->fifo_processed  = true;
+        $tx->fifo_status     = 'complete';
         $tx->saveQuietly();
 
         return [
             'cost_basis_brl'  => $costBasisBrl,
             'profit_loss_brl' => $profitLossBrl,
             'fifo_lots'       => $consumedLots,
+            'is_incomplete'   => false,
         ];
+    }
+
+    private function recordInventoryGap(
+        Transaction $transaction,
+        string $asset,
+        float $requiredQuantity,
+        float $availableQuantity,
+        float $missingQuantity,
+        array $consumedLots,
+        float $knownCostBrl,
+    ): void {
+        FifoInventoryGap::query()->updateOrCreate(
+            [
+                'user_id' => $transaction->user_id,
+                'transaction_id' => $transaction->id,
+            ],
+            [
+                'asset' => $asset,
+                'required_quantity' => round($requiredQuantity, 12),
+                'available_quantity' => round($availableQuantity, 12),
+                'missing_quantity' => round($missingQuantity, 12),
+                'occurred_at' => $transaction->date,
+                'status' => FifoInventoryGap::STATUS_OPEN,
+                'reason' => 'insufficient_acquisition_history',
+                'source' => $transaction->source_type,
+                'consumed_lots' => $consumedLots,
+                'context' => [
+                    'known_cost_brl' => round($knownCostBrl, 10),
+                    'transaction_type' => $transaction->type,
+                    'fifo_status' => 'incomplete',
+                ],
+                'resolved_at' => null,
+            ],
+        );
+    }
+
+    /** @param array<int, int> $scopedTransactionIds @param array<int, int> $detectedGapTransactionIds */
+    private function resolveRecoveredGaps(int $userId, array $scopedTransactionIds, array $detectedGapTransactionIds): int
+    {
+        if ($scopedTransactionIds === []) {
+            return 0;
+        }
+
+        $query = FifoInventoryGap::query()
+            ->where('user_id', $userId)
+            ->where('status', FifoInventoryGap::STATUS_OPEN)
+            ->whereIn('transaction_id', $scopedTransactionIds);
+
+        if ($detectedGapTransactionIds !== []) {
+            $query->whereNotIn('transaction_id', array_values(array_unique($detectedGapTransactionIds)));
+        }
+
+        return $query->update([
+            'status' => FifoInventoryGap::STATUS_RESOLVED,
+            'resolved_at' => now(),
+        ]);
     }
 
     private function updateMonthly(array &$monthly, Transaction $tx, array $result): void
