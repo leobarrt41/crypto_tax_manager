@@ -2,16 +2,16 @@
   <AppLayout title="Trading Bot">
     <div class="py-8">
       <div class="mx-auto max-w-7xl space-y-6 px-4 sm:px-6 lg:px-8">
-        <section class="rounded-xl border border-indigo-200 bg-indigo-50 p-6 text-indigo-950">
+        <section class="rounded-xl border border-indigo-200 bg-indigo-50 p-6 text-indigo-950 dark:border-indigo-500/60 dark:bg-indigo-950/70 dark:text-indigo-50">
           <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div class="max-w-3xl">
-              <p class="text-sm font-semibold uppercase tracking-wide text-indigo-700">Visão Geral</p>
+              <p class="text-sm font-semibold uppercase tracking-wide text-indigo-700 dark:text-indigo-300">Visão Geral</p>
               <h1 class="mt-1 text-3xl font-bold">Trading Bot</h1>
-              <p class="mt-3 text-sm leading-6 text-indigo-900">
+              <p class="mt-3 text-sm leading-6 text-indigo-900 dark:text-indigo-100">
                 Estratégias são regras reutilizáveis e versionadas. Você pode avaliá-las em backtests históricos e em sessões de paper trading manual. Todas as operações paper são fictícias; nenhuma ordem é criada ou enviada.
               </p>
             </div>
-            <span class="inline-flex w-fit rounded-full bg-indigo-200 px-3 py-1 text-xs font-semibold text-indigo-900">
+            <span class="inline-flex w-fit rounded-full bg-indigo-200 px-3 py-1 text-xs font-semibold text-indigo-900 dark:bg-indigo-400/20 dark:text-indigo-100 dark:ring-1 dark:ring-indigo-400/40">
               Fase 3 — simulação manual
             </span>
           </div>

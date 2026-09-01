@@ -131,7 +131,7 @@
               <button
                 @click="importFromExchange"
                 :disabled="!exchangeForm.api_key_id || exchangeImporting || syncInProgress"
-                class="w-full inline-flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary hover:bg-primary-dark focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary disabled:opacity-50 disabled:cursor-not-allowed"
+                class="w-full inline-flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary hover:bg-primary-dark focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary disabled:cursor-not-allowed disabled:opacity-75 dark:disabled:bg-blue-700 dark:disabled:text-blue-100"
               >
                 <span v-if="exchangeImporting" class="flex items-center">
                   <svg class="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
@@ -644,19 +644,19 @@ const syncStatusLabel = computed(() => ({
   failed: 'Falhou',
 }[syncSession.value?.status] || 'Sem sincronização'))
 const syncStatusPanelClass = computed(() => ({
-  pending: 'border-amber-200 bg-amber-50 text-amber-900',
-  processing: 'border-blue-200 bg-blue-50 text-blue-900',
-  pricing: 'border-violet-200 bg-violet-50 text-violet-900',
-  completed: 'border-green-200 bg-green-50 text-green-900',
-  failed: 'border-red-200 bg-red-50 text-red-900',
-}[syncSession.value?.status] || 'border-gray-200 bg-gray-50 text-gray-700'))
+  pending: 'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-500/70 dark:bg-amber-950/70 dark:text-amber-100',
+  processing: 'border-blue-200 bg-blue-50 text-blue-900 dark:border-blue-500/70 dark:bg-blue-950/70 dark:text-blue-100',
+  pricing: 'border-violet-200 bg-violet-50 text-violet-900 dark:border-violet-500/70 dark:bg-violet-950/70 dark:text-violet-100',
+  completed: 'border-green-200 bg-green-50 text-green-900 dark:border-green-500/70 dark:bg-green-950/70 dark:text-green-100',
+  failed: 'border-red-200 bg-red-50 text-red-900 dark:border-red-500/70 dark:bg-red-950/70 dark:text-red-100',
+}[syncSession.value?.status] || 'border-gray-200 bg-gray-50 text-gray-700 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100'))
 const syncStatusBadgeClass = computed(() => ({
-  pending: 'bg-amber-100 text-amber-800',
-  processing: 'bg-blue-100 text-blue-800',
-  pricing: 'bg-violet-100 text-violet-800',
-  completed: 'bg-green-100 text-green-800',
-  failed: 'bg-red-100 text-red-800',
-}[syncSession.value?.status] || 'bg-gray-100 text-gray-700'))
+  pending: 'bg-amber-100 text-amber-800 dark:bg-amber-400/20 dark:text-amber-100',
+  processing: 'bg-blue-100 text-blue-800 dark:bg-blue-400/20 dark:text-blue-100',
+  pricing: 'bg-violet-100 text-violet-800 dark:bg-violet-400/20 dark:text-violet-100',
+  completed: 'bg-green-100 text-green-800 dark:bg-green-400/20 dark:text-green-100',
+  failed: 'bg-red-100 text-red-800 dark:bg-red-400/20 dark:text-red-100',
+}[syncSession.value?.status] || 'bg-gray-100 text-gray-700 dark:bg-slate-700 dark:text-slate-100'))
 const syncStatusMessage = computed(() => {
   if (syncSession.value?.status === 'pending') return 'A sincronização foi solicitada e será iniciada automaticamente pelo servidor.'
   if (syncSession.value?.status === 'processing') return 'A Binance está sendo consultada. Você pode navegar pelo sistema; esta tela se atualizará automaticamente.'

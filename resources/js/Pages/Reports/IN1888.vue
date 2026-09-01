@@ -3,16 +3,17 @@
     <div class="py-12">
       <div class="max-w-7xl mx-auto sm:px-6 lg:px-8">
         <!-- Header -->
-        <div class="bg-white overflow-hidden shadow-xl sm:rounded-lg mb-6">
-          <div class="p-6 border-b border-gray-200">
+        <div class="overflow-hidden shadow-xl sm:rounded-xl mb-6 border border-indigo-200 bg-gradient-to-r from-indigo-50 via-blue-50 to-emerald-50 dark:border-indigo-500/40 dark:from-indigo-950/80 dark:via-blue-950/60 dark:to-emerald-950/50">
+          <div class="p-6 border-b border-indigo-200/80 dark:border-indigo-500/30">
             <div class="flex justify-between items-center">
               <div>
-                <h2 class="text-2xl font-bold text-gray-900">{{ obligationName }}</h2>
-                <p class="text-gray-600 mt-1">Consulte a regra da competência e gere somente o leiaute fiscal aplicável.</p>
+                <p class="mb-1 text-xs font-bold uppercase tracking-widest text-indigo-600 dark:text-indigo-300">Relatórios fiscais</p>
+                <h2 class="text-2xl font-bold text-slate-900 dark:text-white">{{ obligationName }}</h2>
+                <p class="text-slate-600 mt-1 dark:text-slate-200">Consulte a regra da competência e gere somente o leiaute fiscal aplicável.</p>
               </div>
               <div class="flex space-x-3">
                 <Link :href="route('reports.index')" 
-                      class="bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded-lg font-medium transition-colors">
+                      class="border border-slate-300 bg-white/80 hover:bg-white text-slate-700 px-4 py-2 rounded-lg font-medium transition-colors dark:border-slate-500 dark:bg-slate-800/80 dark:text-white dark:hover:bg-slate-700">
                   <svg class="w-5 h-5 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
                   </svg>
@@ -21,7 +22,7 @@
                 <button
                   @click="generateIN1888"
                   :disabled="loading || !form.year || !form.month || !canGenerateLegacy"
-                  class="bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+                  class="bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-400 disabled:text-slate-100 text-white px-4 py-2 rounded-lg font-medium shadow-sm transition-colors dark:disabled:bg-slate-700 dark:disabled:text-slate-400"
                 >
                   <svg v-if="loading" class="w-5 h-5 inline mr-2 animate-spin" fill="none" viewBox="0 0 24 24">
                     <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -40,8 +41,8 @@
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <!-- Formulário de Configuração -->
           <div class="lg:col-span-1">
-            <div class="bg-white rounded-lg shadow p-6">
-              <h3 class="text-lg font-medium text-gray-900 mb-4">Configurações da declaração</h3>
+            <div class="bg-white rounded-xl border-t-4 border-indigo-500 shadow p-6 dark:bg-slate-900 dark:border-indigo-400">
+              <h3 class="text-lg font-semibold text-indigo-800 mb-4 dark:text-indigo-200">Configurações da declaração</h3>
               
               <form @submit.prevent="generateIN1888" class="space-y-4">
                 <!-- Período -->
@@ -170,7 +171,7 @@
               </form>
             </div>
 
-            <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mt-6">
+            <div class="bg-blue-50 border border-blue-200 rounded-xl p-4 mt-6 shadow-sm dark:border-blue-500/40 dark:bg-blue-950/50">
               <div class="flex">
                 <svg class="w-5 h-5 text-blue-500 mr-2 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
                   <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
@@ -224,17 +225,19 @@
             </div>
 
             <!-- Prévia do Arquivo -->
-            <div class="bg-white rounded-lg shadow">
-              <div class="p-6 border-b border-gray-200">
-                <h3 class="text-lg font-medium text-gray-900">Prévia do arquivo {{ obligationName }}</h3>
+            <div class="bg-white rounded-xl border-t-4 border-emerald-500 shadow dark:bg-slate-900 dark:border-emerald-400">
+              <div class="p-6 border-b border-gray-200 dark:border-slate-700">
+                <h3 class="text-lg font-semibold text-emerald-800 dark:text-emerald-200">Prévia do arquivo {{ obligationName }}</h3>
               </div>
 
-              <div v-if="!form.year || !form.month" class="p-8 text-center">
-                <svg class="w-12 h-12 text-gray-400 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <div v-if="!form.year || !form.month" class="p-10 text-center bg-gradient-to-b from-emerald-50/60 to-transparent dark:from-emerald-950/30">
+                <div class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-100 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-300">
+                <svg class="w-9 h-9" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
                 </svg>
-                <h4 class="text-lg font-medium text-gray-900 mb-2">Selecione o período</h4>
-                <p class="text-gray-500">Escolha o mês e ano para consultar a obrigação e o leiaute aplicável.</p>
+                </div>
+                <h4 class="text-lg font-semibold text-slate-900 mb-2 dark:text-white">Selecione o período</h4>
+                <p class="text-slate-500 dark:text-slate-300">Escolha o mês e ano para consultar a obrigação e o leiaute aplicável.</p>
               </div>
 
               <div v-else-if="loading" class="p-8 text-center">
