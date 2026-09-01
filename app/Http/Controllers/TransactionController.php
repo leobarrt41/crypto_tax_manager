@@ -788,7 +788,12 @@ private function mapImportedRowToTransactionData(array $data, string $format, st
             return null;
         }
 
-        return $this->enrichTransactionFiatValues($mapped);
+        $preserveCsvBrl = (bool) ($mapped['_preserve_csv_brl'] ?? false);
+        unset($mapped['_preserve_csv_brl']);
+
+        // O relatório anual já contém a base fiscal em BRL. Nesse caso, não
+        // substituímos o documento por cotação derivada ou consulta externa.
+        return $preserveCsvBrl ? $mapped : $this->enrichTransactionFiatValues($mapped);
     }
 
     $mapped = [
@@ -820,60 +825,10 @@ private function mapBinanceRowToTransactionData(array $data, string $sourceModel
         $normalized[$normKey] = $value;
     }
 
-    // Layout do relatório anual CSV da Binance
-    if (isset($normalized['sent_amount']) && isset($normalized['received_amount'])) {
-        $fromAmount = $this->parseNumeric($normalized['sent_amount'] ?? null);
-        $toAmount = $this->parseNumeric($normalized['received_amount'] ?? null);
-        $fromAsset = strtoupper(trim((string)($normalized['sent_currency'] ?? '')));
-        $toAsset = strtoupper(trim((string)($normalized['received_currency'] ?? '')));
-        $marketType = strtoupper(trim((string)($normalized['market_model_type'] ?? '')));
-        $eventType = strtoupper(trim((string)($normalized['type'] ?? 'TRADE')));
-        $dateRawAnnual = $normalized['datetime_tz_brt']
-            ?? $normalized['datetime_tz_gmt_03_00']
-            ?? $normalized['datetime']
-            ?? $normalized['date']
-            ?? null;
-        $referenceId = $normalized['id'] ?? null;
-
-        if (!$fromAsset || !$toAsset || !$fromAmount || !$toAmount) {
-            return null;
-        }
-
-        $totalBrlAnnual = $this->parseNumeric($normalized['sent_value_brl'] ?? null)
-            ?? $this->parseNumeric($normalized['received_value_brl'] ?? null);
-
-        $stablecoins = ['USDT', 'USDC', 'BUSD', 'TUSD', 'FDUSD'];
-        $totalUsdtAnnual = null;
-        if (in_array($fromAsset, $stablecoins, true)) {
-            $totalUsdtAnnual = $fromAmount;
-        } elseif (in_array($toAsset, $stablecoins, true)) {
-            $totalUsdtAnnual = $toAmount;
-        }
-
-        $priceAnnual = $this->deriveAnnualUnitPrice(
-            $fromAsset,
-            $toAsset,
-            $fromAmount,
-            $toAmount
-        );
-
-        return [
-            'user_id' => auth()->id(),
-            'source_type' => $sourceModel,
-            'source_id' => $sourceId,
-            'from_asset' => $fromAsset,
-            'to_asset' => $toAsset,
-            'from_amount' => $fromAmount,
-            'to_amount' => $toAmount,
-            'price' => $priceAnnual,
-            'total_usdt' => $totalUsdtAnnual,
-            'total_brl' => $totalBrlAnnual,
-            'type' => $eventType === 'TRADE' ? ($marketType === 'CONVERT' ? 'convert' : 'trade') : strtolower($eventType),
-            'operation' => strtolower($marketType ?: $eventType),
-            'txid' => $referenceId,
-            'reference' => $referenceId,
-            'date' => $this->parseBinanceDateValue($dateRawAnnual),
-        ];
+    // Layout do relatório anual CSV da Binance. As operações podem conter
+    // duas pernas (trade/convert) ou uma única perna (entrada/saída).
+    if ($this->isBinanceAnnualCsvRow($normalized)) {
+        return $this->mapBinanceAnnualCsvRow($normalized, $sourceModel, $sourceId);
     }
 
     $pair = strtoupper((string)($normalized['pair'] ?? $normalized['symbol'] ?? ''));
@@ -953,6 +908,150 @@ private function mapBinanceRowToTransactionData(array $data, string $sourceModel
     ];
 }
 
+private function isBinanceAnnualCsvRow(array $row): bool
+{
+    return array_key_exists('datetime_tz_brt', $row)
+        || array_key_exists('datetime_tz_gmt_03_00', $row)
+        || (array_key_exists('sent_currency', $row) && array_key_exists('received_currency', $row));
+}
+
+private function mapBinanceAnnualCsvRow(array $row, string $sourceModel, int $sourceId): ?array
+{
+    $fromAmount = $this->parseNumeric($row['sent_amount'] ?? null);
+    $toAmount = $this->parseNumeric($row['received_amount'] ?? null);
+    $fromAsset = strtoupper(trim((string) ($row['sent_currency'] ?? '')));
+    $toAsset = strtoupper(trim((string) ($row['received_currency'] ?? '')));
+    $hasSent = $fromAsset !== '' && $fromAmount !== null && $fromAmount > 0;
+    $hasReceived = $toAsset !== '' && $toAmount !== null && $toAmount > 0;
+    $originalType = trim((string) ($row['type'] ?? ''));
+    $normalizedType = $this->normalizeBinanceAnnualType($originalType, $row['market_model_type'] ?? null);
+
+    if ($normalizedType === null) {
+        return null;
+    }
+
+    $requiresBothSides = in_array($normalizedType, ['trade', 'buy', 'sell', 'convert', 'swap'], true);
+    $isCredit = in_array($normalizedType, ['deposit', 'receive'], true);
+    $isDebit = in_array($normalizedType, ['send', 'withdrawal', 'withdraw'], true);
+
+    if (($requiresBothSides && (!$hasSent || !$hasReceived))
+        || ($isCredit && !$hasReceived)
+        || ($isDebit && !$hasSent)) {
+        return null;
+    }
+
+    if ($isCredit) {
+        $fromAsset = '';
+        $fromAmount = null;
+    }
+    if ($isDebit) {
+        $toAsset = '';
+        $toAmount = null;
+    }
+
+    $sentValueBrl = $this->parseNumeric($row['sent_value_brl'] ?? null);
+    $receivedValueBrl = $this->parseNumeric($row['received_value_brl'] ?? null);
+    [$totalBrl, $brlValueSource] = $this->selectAnnualCsvBrlValue(
+        $normalizedType,
+        $sentValueBrl,
+        $receivedValueBrl,
+    );
+
+    $stablecoins = ['USDT', 'USDC', 'BUSD', 'TUSD', 'FDUSD'];
+    $totalUsdt = $hasSent && in_array($fromAsset, $stablecoins, true)
+        ? $fromAmount
+        : ($hasReceived && in_array($toAsset, $stablecoins, true) ? $toAmount : null);
+    $isOneSided = $isCredit || $isDebit;
+    $commission = $this->parseNumeric($row['fee_amount'] ?? null);
+    $commissionAsset = strtoupper(trim((string) ($row['fee_currency'] ?? '')));
+    $commissionValueBrl = $this->parseNumeric($row['fee_value_brl'] ?? null);
+    $dateRaw = $row['datetime_tz_brt']
+        ?? $row['datetime_tz_gmt_03_00']
+        ?? $row['datetime']
+        ?? $row['date']
+        ?? null;
+
+    return [
+        'user_id' => auth()->id(),
+        'source_type' => $sourceModel,
+        'source_id' => $sourceId,
+        'from_asset' => $fromAsset !== '' ? $fromAsset : null,
+        'to_asset' => $toAsset !== '' ? $toAsset : null,
+        'from_amount' => $fromAmount,
+        'to_amount' => $toAmount,
+        'price' => $requiresBothSides ? $this->deriveAnnualUnitPrice($fromAsset, $toAsset, (float) $fromAmount, (float) $toAmount) : null,
+        'total_usdt' => $totalUsdt,
+        'total_brl' => $totalBrl,
+        'type' => $normalizedType === 'swap' ? 'convert' : $normalizedType,
+        'operation' => strtolower(trim((string) ($row['market_model_type'] ?? $originalType))),
+        'txid' => $row['id'] ?? null,
+        'reference' => $row['id'] ?? null,
+        'commission' => $commission,
+        'commission_asset' => $commissionAsset !== '' ? $commissionAsset : null,
+        'commission_value_brl' => $commissionValueBrl,
+        'reconciliation_status' => $isOneSided ? 'pending_transfer_reconciliation' : null,
+        'import_metadata' => [
+            'format' => 'binance_annual_csv',
+            'original_type' => $originalType,
+            'market_model_type' => $row['market_model_type'] ?? null,
+            'brl_values' => [
+                'sent_value_brl' => $sentValueBrl,
+                'received_value_brl' => $receivedValueBrl,
+                'selected_source' => $brlValueSource,
+            ],
+            'one_sided' => $isOneSided,
+            'fiscal_treatment' => $isOneSided ? 'pending_transfer_reconciliation' : 'standard_transaction',
+        ],
+        'date' => $this->parseBinanceDateValue($dateRaw, 'America/Sao_Paulo'),
+        '_preserve_csv_brl' => $totalBrl !== null && $totalBrl > 0,
+    ];
+}
+
+private function normalizeBinanceAnnualType(string $type, mixed $marketType): ?string
+{
+    $normalized = strtolower(trim(preg_replace('/\\s+/', ' ', $type) ?? ''));
+    $market = strtolower(trim((string) $marketType));
+    $aliases = [
+        'trade' => 'trade',
+        'buy' => 'buy',
+        'sell' => 'sell',
+        'convert' => 'convert',
+        'swap' => 'swap',
+        'deposit' => 'deposit',
+        'receive' => 'receive',
+        'received' => 'receive',
+        'send' => 'send',
+        'withdrawal' => 'withdrawal',
+        'withdraw' => 'withdraw',
+    ];
+
+    $result = $aliases[$normalized] ?? null;
+
+    return $result === 'trade' && $market === 'convert' ? 'convert' : $result;
+}
+
+/** @return array{0: ?float, 1: string|null} */
+private function selectAnnualCsvBrlValue(string $type, ?float $sentValueBrl, ?float $receivedValueBrl): array
+{
+    $hasSentValue = $sentValueBrl !== null && $sentValueBrl > 0;
+    $hasReceivedValue = $receivedValueBrl !== null && $receivedValueBrl > 0;
+
+    if (in_array($type, ['deposit', 'receive'], true)) {
+        return [$hasReceivedValue ? $receivedValueBrl : null, $hasReceivedValue ? 'received_value_brl' : null];
+    }
+    if (in_array($type, ['send', 'withdrawal', 'withdraw'], true)) {
+        return [$hasSentValue ? $sentValueBrl : null, $hasSentValue ? 'sent_value_brl' : null];
+    }
+
+    // Em operações de duas pernas, a saída é a referência determinística.
+    // A perna recebida é usada somente quando a saída não trouxe valor BRL.
+    if ($hasSentValue) {
+        return [$sentValueBrl, 'sent_value_brl'];
+    }
+
+    return [$hasReceivedValue ? $receivedValueBrl : null, $hasReceivedValue ? 'received_value_brl' : null];
+}
+
 private function deriveAnnualUnitPrice(string $fromAsset, string $toAsset, float $fromAmount, float $toAmount): float
 {
     if ($fromAmount <= 0 || $toAmount <= 0) {
@@ -991,7 +1090,7 @@ private function parseAmountAssetCell(string $value): array
     return [null, null];
 }
 
-private function parseBinanceDateValue($dateRaw): Carbon
+private function parseBinanceDateValue($dateRaw, ?string $timezone = null): Carbon
 {
     if (!$dateRaw) {
         return now();
@@ -1006,13 +1105,13 @@ private function parseBinanceDateValue($dateRaw): Carbon
 
     foreach ($formats as $format) {
         try {
-            return Carbon::createFromFormat($format, $dateString);
+            return Carbon::createFromFormat($format, $dateString, $timezone);
         } catch (\Throwable $e) {
             // tenta próximo formato
         }
     }
 
-    return Carbon::parse($dateString);
+    return Carbon::parse($dateString, $timezone);
 }
 
 private function enrichTransactionFiatValues(array $tx): array
