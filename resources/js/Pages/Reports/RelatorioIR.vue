@@ -96,51 +96,55 @@
 
         <!-- ── Histórico de aquisição ─────────────────────────────────────── -->
         <section v-if="filters.year" class="mb-6 rounded-lg border p-6 shadow"
-                 :class="acquisitionHistory.status === 'complete' ? 'border-green-200 bg-green-50' : 'border-amber-200 bg-amber-50'">
+                 :class="acquisitionHistory.status === 'complete'
+                   ? 'border-green-200 bg-green-50 dark:border-emerald-600 dark:bg-emerald-950/40'
+                   : 'border-amber-200 bg-amber-50 dark:border-amber-600 dark:bg-amber-950/40'">
           <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <h3 class="text-lg font-semibold text-gray-900">Histórico de aquisição</h3>
               <p v-if="loadingAcquisitionHistory" class="mt-1 text-sm text-gray-600">Verificando as compras e os lotes anteriores...</p>
-              <p v-else-if="acquisitionHistory.status === 'complete'" class="mt-1 text-sm text-green-800">
+              <p v-else-if="acquisitionHistory.status === 'complete'" class="mt-1 text-sm text-green-800 dark:text-emerald-200">
                 Histórico completo para as saídas registradas em {{ filters.year }}. O relatório fiscal pode ser exportado.
               </p>
-              <p v-else class="mt-1 text-sm text-amber-900">
+              <p v-else class="mt-1 text-sm leading-6 text-amber-950 dark:text-amber-100">
                 <strong>FIFO incompleto.</strong> Encontramos uma venda sem compras anteriores suficientes para identificar o custo de compra. Importe seus arquivos CSV anteriores para completar o histórico.
               </p>
             </div>
             <span class="inline-flex w-fit items-center rounded-full px-3 py-1 text-sm font-medium"
-                  :class="acquisitionHistory.status === 'complete' ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-900'">
+                  :class="acquisitionHistory.status === 'complete'
+                    ? 'bg-green-100 text-green-800 dark:bg-emerald-500/20 dark:text-emerald-200'
+                    : 'bg-amber-100 text-amber-950 dark:bg-amber-300 dark:text-amber-950'">
               {{ acquisitionHistory.status === 'complete' ? 'Histórico completo' : `${acquisitionHistory.open_gaps_count} pendência(s)` }}
             </span>
           </div>
 
           <template v-if="!loadingAcquisitionHistory && acquisitionHistory.status !== 'complete'">
-            <div class="mt-4 overflow-x-auto rounded-lg border border-amber-200 bg-white">
-              <table class="min-w-full divide-y divide-amber-100">
-                <thead class="bg-amber-50">
+            <div class="mt-4 overflow-x-auto rounded-lg border border-amber-300 bg-white dark:border-amber-700 dark:bg-slate-900">
+              <table class="min-w-full divide-y divide-amber-100 dark:divide-amber-800/60">
+                <thead class="bg-amber-100 dark:bg-amber-900/50">
                   <tr>
-                    <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-amber-900">Ativo</th>
-                    <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-amber-900">Data</th>
-                    <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-amber-900">Quantidade faltante</th>
-                    <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-amber-900">Transação relacionada</th>
-                    <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-amber-900">Situação</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-amber-950 dark:text-amber-100">Ativo</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-amber-950 dark:text-amber-100">Data</th>
+                    <th class="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-amber-950 dark:text-amber-100">Quantidade faltante</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-amber-950 dark:text-amber-100">Transação relacionada</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-amber-950 dark:text-amber-100">Situação</th>
                   </tr>
                 </thead>
-                <tbody class="divide-y divide-amber-100">
-                  <tr v-for="gap in acquisitionHistory.gaps" :key="gap.id">
-                    <td class="px-4 py-3 text-sm font-semibold text-gray-900">{{ gap.asset }}</td>
-                    <td class="px-4 py-3 text-sm text-gray-700">{{ formatDate(gap.occurred_at) }}</td>
-                    <td class="px-4 py-3 text-right text-sm text-gray-700">{{ formatQuantity(gap.missing_quantity) }}</td>
-                    <td class="px-4 py-3 text-sm text-gray-700">#{{ gap.transaction?.id }} · {{ gap.transaction?.type || 'Saída' }}</td>
-                    <td class="px-4 py-3 text-sm font-medium text-amber-800">Operações anteriores ausentes</td>
+                <tbody class="divide-y divide-amber-100 dark:divide-slate-700">
+                  <tr v-for="gap in acquisitionHistory.gaps" :key="gap.id" class="dark:hover:bg-slate-800/70">
+                    <td class="px-4 py-3 text-sm font-semibold text-gray-900 dark:text-white">{{ gap.asset }}</td>
+                    <td class="px-4 py-3 text-sm text-gray-700 dark:text-slate-200">{{ formatDate(gap.occurred_at) }}</td>
+                    <td class="px-4 py-3 text-right text-sm text-gray-700 dark:text-slate-200">{{ formatQuantity(gap.missing_quantity) }}</td>
+                    <td class="px-4 py-3 text-sm text-gray-700 dark:text-slate-200">#{{ gap.transaction?.id }} · {{ gap.transaction?.type || 'Saída' }}</td>
+                    <td class="px-4 py-3 text-sm font-semibold text-amber-950 dark:text-amber-200">Operações anteriores ausentes</td>
                   </tr>
                 </tbody>
               </table>
             </div>
             <div class="mt-4 flex flex-wrap gap-3">
               <Link :href="route('transactions.import')" class="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">Importar CSVs anteriores</Link>
-              <button type="button" disabled class="cursor-not-allowed rounded-lg bg-gray-200 px-4 py-2 text-sm font-medium text-gray-500" title="A busca complementar com prévia será disponibilizada em etapa posterior.">Buscar movimentações na Binance</button>
-              <a href="#correcao-manual" class="rounded-lg border border-amber-400 bg-white px-4 py-2 text-sm font-medium text-amber-900 hover:bg-amber-100">Correção manual</a>
+              <button type="button" disabled class="cursor-not-allowed rounded-lg bg-gray-200 px-4 py-2 text-sm font-medium text-gray-500 dark:bg-slate-700 dark:text-slate-300" title="A busca complementar com prévia será disponibilizada em etapa posterior.">Buscar movimentações na Binance</button>
+              <a href="#correcao-manual" class="rounded-lg border border-amber-500 bg-white px-4 py-2 text-sm font-semibold text-amber-950 hover:bg-amber-100 dark:bg-amber-500/15 dark:text-amber-100 dark:hover:bg-amber-500/25">Correção manual</a>
             </div>
           </template>
         </section>
@@ -190,8 +194,8 @@
                 <input v-model.trim="openingBalanceForm.notes" maxlength="2000" placeholder="Ex.: Custo consolidado de aquisições anteriores"
                        class="w-full rounded-md border-gray-300 focus:border-blue-500 focus:ring-blue-500" />
               </div>
-              <label class="md:col-span-2 lg:col-span-3 flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-                <input v-model="confirmManualCorrection" type="checkbox" class="mt-1 rounded border-amber-400 text-amber-600 focus:ring-amber-500" />
+              <label class="md:col-span-2 lg:col-span-3 flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm font-medium leading-5 text-amber-950 dark:border-amber-600 dark:bg-amber-950/50 dark:text-amber-100">
+                <input v-model="confirmManualCorrection" type="checkbox" class="mt-1 rounded border-amber-500 bg-white text-amber-600 focus:ring-amber-500 dark:border-amber-400 dark:bg-slate-900 dark:ring-offset-slate-900" />
                 <span>Entendo que esta é uma correção excepcional. Só confirmarei se a aquisição não estiver nas transações importadas, pois um lote manual adicional pode duplicar o estoque FIFO.</span>
               </label>
               <div class="flex items-end">

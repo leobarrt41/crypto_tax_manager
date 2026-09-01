@@ -63,6 +63,20 @@ public function index(Request $request)
         $q->where('type', $type);
     });
 
+    $query->when($filters['crypto_asset_id'] ?? null, function ($q, $cryptoAssetId) {
+        $symbol = CryptoAsset::query()->whereKey($cryptoAssetId)->value('symbol');
+
+        if ($symbol) {
+            $normalizedSymbol = Str::upper(trim($symbol));
+
+            $q->where(function ($assetQuery) use ($normalizedSymbol) {
+                $assetQuery
+                    ->whereRaw('UPPER(from_asset) = ?', [$normalizedSymbol])
+                    ->orWhereRaw('UPPER(to_asset) = ?', [$normalizedSymbol]);
+            });
+        }
+    });
+
     if (($filters['date_range'] ?? null) === 'custom' && !empty($filters['start_date']) && !empty($filters['end_date'])) {
         $query->whereBetween('date', [$filters['start_date'], $filters['end_date']]);
     } elseif (!empty($filters['date_range'])) {
