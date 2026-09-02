@@ -11,6 +11,15 @@ class Transaction extends Model
 {
     use HasFactory;
 
+    protected static function booted(): void
+    {
+        static::deleting(function (Transaction $transaction): void {
+            if ($transaction->canonicalReconciliations()->exists() || $transaction->duplicateReconciliation()->exists()) {
+                throw new \LogicException('Uma transação conciliada não pode ser excluída porque a trilha de auditoria deve ser preservada.');
+            }
+        });
+    }
+
     protected $fillable = [
         'user_id',
         'from_asset',
@@ -52,6 +61,7 @@ class Transaction extends Model
         'to_cost_evidence_type',
         'to_cost_basis_brl',
         'import_metadata',
+        'import_origin',
         'side',
         'executed_at',
     ];

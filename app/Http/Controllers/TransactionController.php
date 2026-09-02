@@ -205,6 +205,7 @@ class TransactionController extends Controller
         ]);
 
         $data['user_id'] = auth()->id();
+        $data['import_origin'] = 'manual';
 
         try {
             $transaction = Transaction::create($data);
@@ -836,6 +837,7 @@ class TransactionController extends Controller
             'user_id' => auth()->id(),
             'source_type' => $sourceModel,
             'source_id' => $sourceId,
+            'import_origin' => 'legacy_unknown',
             'from_asset' => $data['from_asset'] ?? null,
             'to_asset' => $data['to_asset'] ?? null,
             'from_amount' => $this->parseNumeric($data['from_amount'] ?? null),
@@ -1011,6 +1013,7 @@ class TransactionController extends Controller
             'user_id' => auth()->id(),
             'source_type' => $sourceModel,
             'source_id' => $sourceId,
+            'import_origin' => 'binance_annual_csv',
             'from_asset' => $fromAsset !== '' ? $fromAsset : null,
             'to_asset' => $toAsset !== '' ? $toAsset : null,
             'from_amount' => $fromAmount,

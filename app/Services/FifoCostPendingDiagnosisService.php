@@ -103,6 +103,8 @@ class FifoCostPendingDiagnosisService
             'requires_manual_confirmation' => $classification['requires_manual_confirmation'],
             'historical_quote_available' => $classification['historical_quote_available'],
             'historical_quote_is_documentary' => $classification['historical_quote_is_documentary'],
+            'documented_value_available' => $classification['documented_value_available'],
+            'cost_evidence_kind' => $classification['cost_evidence_kind'],
             'blocks_fiscal_report' => $gap->status === FifoInventoryGap::STATUS_OPEN,
             'explanation_for_user' => $classification['explanation'],
         ];
@@ -256,7 +258,9 @@ class FifoCostPendingDiagnosisService
                 'requires_manual_confirmation' => true,
                 'missing_fields' => [],
                 'historical_quote_available' => $hasHistoricalQuote,
-                'historical_quote_is_documentary' => true,
+                'historical_quote_is_documentary' => false,
+                'documented_value_available' => true,
+                'cost_evidence_kind' => 'binance_annual_csv_received_value_brl',
                 'explanation' => 'O CSV anual contém valor recebido em reais, mas o custo da perna recebida não foi marcado como conhecido. Isso é candidato a correção de lógica.',
             ]);
         }
@@ -272,6 +276,8 @@ class FifoCostPendingDiagnosisService
                 'missing_fields' => ['import_metadata.brl_values.received_value_brl'],
                 'historical_quote_available' => true,
                 'historical_quote_is_documentary' => false,
+                'documented_value_available' => false,
+                'cost_evidence_kind' => 'historical_market_quote',
                 'explanation' => 'Encontramos uma cotação histórica estimada para a conversão, mas não um documento com o valor recebido em reais. A estimativa não será promovida automaticamente a custo fiscal conhecido.',
             ]);
         }
@@ -305,6 +311,8 @@ class FifoCostPendingDiagnosisService
             'requires_manual_confirmation' => false,
             'historical_quote_available' => false,
             'historical_quote_is_documentary' => false,
+            'documented_value_available' => false,
+            'cost_evidence_kind' => null,
             'evidence' => [
                 'gap_reason' => $gap->reason,
                 'source_transaction_type' => $source?->type,

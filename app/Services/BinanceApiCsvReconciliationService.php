@@ -4,48 +4,43 @@ namespace App\Services;
 
 use App\Models\Transaction;
 use App\Models\TransactionReconciliation;
-use App\Models\UserApiKey;
+use App\Models\User;
 use App\Support\DecimalMath;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\DB;
+use InvalidArgumentException;
 
 class BinanceApiCsvReconciliationService
 {
-    public const MATCH_TYPE = 'binance_api_csv_convert_v1';
+    public const MATCH_TYPE_DETERMINISTIC = 'binance_api_csv_stable_id_v2';
 
-    public function __construct(
-        private readonly DecimalMath $decimal,
-        private readonly TransactionImportEvidenceService $importEvidence,
-    ) {}
+    public const MATCH_TYPE_HEURISTIC = 'binance_api_csv_window_v2';
+
+    public function __construct(private readonly DecimalMath $decimal) {}
 
     /** @return array{status:string,reconciliation:?TransactionReconciliation,candidates:int} */
     public function reconcileTransaction(Transaction $transaction, bool $persist = true): array
     {
-        if (strtolower((string) $transaction->type) !== 'convert') {
+        if (strtolower((string) $transaction->type) !== 'convert'
+            || ! in_array($transaction->import_origin, ['binance_api', 'binance_annual_csv'], true)) {
             return ['status' => 'not_eligible', 'reconciliation' => null, 'candidates' => 0];
         }
 
         $transaction->refresh();
-        $isCsv = $this->isAnnualCsv($transaction);
-        $isApi = $this->isApiTransaction($transaction);
-        if (! $isCsv && ! $isApi) {
-            return ['status' => 'not_eligible', 'reconciliation' => null, 'candidates' => 0];
-        }
-
         $existing = TransactionReconciliation::query()
-            ->where(function (Builder $query) use ($transaction): void {
-                $query->where('canonical_transaction_id', $transaction->id)
-                    ->orWhere('matched_transaction_id', $transaction->id);
-            })
+            ->where(fn (Builder $query) => $query
+                ->where('canonical_transaction_id', $transaction->id)
+                ->orWhere('matched_transaction_id', $transaction->id))
             ->first();
         if ($existing !== null) {
             return ['status' => 'already_reconciled', 'reconciliation' => $existing, 'candidates' => 1];
         }
 
-        $candidates = $this->counterpartCandidates($transaction, $isCsv)->get()
+        $transactionIsCsv = $transaction->import_origin === 'binance_annual_csv';
+        $candidates = $this->counterpartCandidates($transaction, $transactionIsCsv)->get()
             ->filter(fn (Transaction $candidate): bool => $this->sameEconomicEvent($transaction, $candidate))
             ->values();
-
         if ($candidates->count() !== 1) {
             return [
                 'status' => $candidates->isEmpty() ? 'no_match' : 'ambiguous',
@@ -55,53 +50,108 @@ class BinanceApiCsvReconciliationService
         }
 
         $counterpart = $candidates->first();
-        $csv = $isCsv ? $transaction : $counterpart;
-        $api = $isApi ? $transaction : $counterpart;
-        $attributes = $this->attributes($csv, $api);
+        $csv = $transactionIsCsv ? $transaction : $counterpart;
+        $api = $transactionIsCsv ? $counterpart : $transaction;
+        $stableId = $this->commonStableId($csv, $api);
 
         if (! $persist) {
-            return ['status' => 'match_found', 'reconciliation' => null, 'candidates' => 1];
+            return [
+                'status' => $stableId === null ? 'heuristic_candidate_found' : 'deterministic_match_found',
+                'reconciliation' => null,
+                'candidates' => 1,
+            ];
         }
 
-        $reconciliation = TransactionReconciliation::query()->updateOrCreate(
-            ['matched_transaction_id' => $api->id],
-            $attributes,
-        );
+        $reconciliation = DB::transaction(function () use ($csv, $api, $stableId): TransactionReconciliation {
+            Transaction::query()->whereKey([$csv->id, $api->id])->lockForUpdate()->get();
 
-        return ['status' => 'reconciled', 'reconciliation' => $reconciliation, 'candidates' => 1];
+            return TransactionReconciliation::query()->create($this->attributes($csv, $api, $stableId));
+        });
+
+        return [
+            'status' => 'pending_review',
+            'reconciliation' => $reconciliation,
+            'candidates' => 1,
+        ];
     }
 
     /** @return array<string, int> */
     public function reconcileUserYear(int $userId, int $year, bool $persist = false): array
     {
-        $stats = [
-            'csv_transactions_scanned' => 0,
-            'reconciled' => 0,
-            'matches_found' => 0,
-            'already_reconciled' => 0,
-            'no_match' => 0,
-            'ambiguous' => 0,
-        ];
+        $stats = array_fill_keys([
+            'csv_transactions_scanned', 'confirmed', 'pending_review', 'deterministic_matches_found',
+            'heuristic_candidates_found', 'already_reconciled', 'no_match', 'ambiguous',
+        ], 0);
 
         Transaction::query()
             ->where('user_id', $userId)
             ->where('type', 'convert')
+            ->where('import_origin', 'binance_annual_csv')
             ->whereYear('date', $year)
-            ->orderBy('date')
-            ->orderBy('id')
-            ->get()
-            ->filter(fn (Transaction $transaction): bool => $this->isAnnualCsv($transaction))
+            ->orderBy('date')->orderBy('id')
             ->each(function (Transaction $transaction) use (&$stats, $persist): void {
                 $stats['csv_transactions_scanned']++;
                 $result = $this->reconcileTransaction($transaction, $persist);
-                if ($result['status'] === 'match_found') {
-                    $stats['matches_found']++;
-                } elseif (array_key_exists($result['status'], $stats)) {
-                    $stats[$result['status']]++;
+                $key = match ($result['status']) {
+                    'deterministic_match_found' => 'deterministic_matches_found',
+                    'heuristic_candidate_found' => 'heuristic_candidates_found',
+                    default => $result['status'],
+                };
+                if (array_key_exists($key, $stats)) {
+                    $stats[$key]++;
                 }
             });
 
         return $stats;
+    }
+
+    public function transition(
+        TransactionReconciliation $reconciliation,
+        string $status,
+        User $actor,
+        ?string $reason = null,
+    ): TransactionReconciliation
+    {
+        if ($actor->id !== $reconciliation->user_id) {
+            throw new InvalidArgumentException('O usuário responsável deve ser o proprietário da conciliação.');
+        }
+
+        return DB::transaction(function () use ($reconciliation, $status, $actor, $reason): TransactionReconciliation {
+            $locked = TransactionReconciliation::query()->lockForUpdate()->findOrFail($reconciliation->id);
+            $current = $locked->status;
+            $valid = ($current === TransactionReconciliation::STATUS_PENDING_REVIEW
+                    && in_array($status, [TransactionReconciliation::STATUS_CONFIRMED, TransactionReconciliation::STATUS_REJECTED], true))
+                || ($current === TransactionReconciliation::STATUS_CONFIRMED && $status === TransactionReconciliation::STATUS_REVOKED);
+            if (! $valid) {
+                throw new InvalidArgumentException('Transição de conciliação inválida.');
+            }
+
+            $occurredAt = now('UTC');
+            $locked->forceFill([
+                'status' => $status,
+                $status.'_at' => $occurredAt,
+            ])->save();
+
+            DB::table('transaction_reconciliation_events')->insert([
+                'reconciliation_id' => $locked->id,
+                'actor_user_id' => $actor->id,
+                'event_type' => $status,
+                'previous_status' => $current,
+                'new_status' => $status,
+                'reason' => $reason,
+                'evidence' => json_encode([
+                    'match_type' => $locked->match_type,
+                    'confidence' => $locked->confidence,
+                    'fingerprint' => $locked->fingerprint,
+                    'matching_evidence' => $locked->matching_evidence,
+                ], JSON_THROW_ON_ERROR),
+                'occurred_at' => $occurredAt,
+                'created_at' => $occurredAt,
+                'updated_at' => $occurredAt,
+            ]);
+
+            return $locked->refresh();
+        });
     }
 
     private function counterpartCandidates(Transaction $transaction, bool $transactionIsCsv): Builder
@@ -112,20 +162,12 @@ class BinanceApiCsvReconciliationService
             ->where('user_id', $transaction->user_id)
             ->where('id', '!=', $transaction->id)
             ->where('type', 'convert')
+            ->where('import_origin', $transactionIsCsv ? 'binance_api' : 'binance_annual_csv')
             ->where('from_asset', strtoupper((string) $transaction->from_asset))
             ->where('to_asset', strtoupper((string) $transaction->to_asset))
             ->whereBetween('date', [$date->subSeconds(5), $date->addSeconds(5)])
-            ->when(
-                $transactionIsCsv,
-                fn (Builder $query): Builder => $query
-                    ->where('source_type', UserApiKey::class)
-                    ->whereNull('import_metadata')
-                    ->whereDoesntHave('documentaryEvidences', fn (Builder $evidence): Builder => $evidence->where('format', 'binance_annual_csv')),
-                fn (Builder $query): Builder => $query->where(function (Builder $csv): void {
-                    $csv->whereNotNull('import_metadata')
-                        ->orWhereHas('documentaryEvidences', fn (Builder $evidence): Builder => $evidence->where('format', 'binance_annual_csv'));
-                }),
-            )
+            ->whereDoesntHave('canonicalReconciliations')
+            ->whereDoesntHave('duplicateReconciliation')
             ->orderBy('id');
     }
 
@@ -137,26 +179,26 @@ class BinanceApiCsvReconciliationService
 
     private function sameDecimal(mixed $left, mixed $right): bool
     {
-        return is_numeric($left)
-            && is_numeric($right)
+        return is_numeric($left) && is_numeric($right)
             && $this->decimal->compare((string) $left, (string) $right) === 0;
     }
 
-    private function isAnnualCsv(Transaction $transaction): bool
+    private function commonStableId(Transaction $csv, Transaction $api): ?array
     {
-        return $this->importEvidence->annualCsvMetadata($transaction) !== null;
-    }
+        foreach (['reference', 'txid', 'order_id', 'trade_id'] as $field) {
+            $csvValue = trim((string) $csv->{$field});
+            $apiValue = trim((string) $api->{$field});
+            if ($csvValue !== '' && hash_equals($csvValue, $apiValue)) {
+                return ['field' => $field, 'value' => $csvValue];
+            }
+        }
 
-    private function isApiTransaction(Transaction $transaction): bool
-    {
-        return $transaction->source_type === UserApiKey::class
-            && ! $this->isAnnualCsv($transaction);
+        return null;
     }
 
     /** @return array<string, mixed> */
-    private function attributes(Transaction $csv, Transaction $api): array
+    private function attributes(Transaction $csv, Transaction $api, ?array $stableId): array
     {
-        $brlValues = data_get($this->importEvidence->annualCsvMetadata($csv), 'brl_values', []);
         $fingerprintData = [
             'type' => 'convert',
             'from_asset' => strtoupper((string) $csv->from_asset),
@@ -165,25 +207,26 @@ class BinanceApiCsvReconciliationService
             'to_amount' => $this->decimal->normalize((string) $csv->to_amount),
             'date_utc' => CarbonImmutable::parse($csv->date)->utc()->toIso8601String(),
         ];
+        $now = now('UTC');
 
         return [
             'user_id' => $csv->user_id,
             'canonical_transaction_id' => $csv->id,
-            'match_type' => self::MATCH_TYPE,
-            'confidence' => 'high',
+            'matched_transaction_id' => $api->id,
+            'match_type' => $stableId === null ? self::MATCH_TYPE_HEURISTIC : self::MATCH_TYPE_DETERMINISTIC,
+            'confidence' => $stableId === null ? 'medium' : 'high',
             'fingerprint' => hash('sha256', json_encode($fingerprintData, JSON_THROW_ON_ERROR)),
-            'status' => TransactionReconciliation::STATUS_CONFIRMED,
+            'status' => TransactionReconciliation::STATUS_PENDING_REVIEW,
             'matching_evidence' => [
                 ...$fingerprintData,
+                'stable_id' => $stableId,
                 'csv_reference' => $csv->reference,
                 'api_reference' => $api->reference,
-                'csv_received_value_brl' => isset($brlValues['received_value_brl'])
-                    ? (string) $brlValues['received_value_brl']
-                    : null,
-                'csv_selected_brl_source' => $brlValues['selected_source'] ?? null,
                 'date_tolerance_seconds' => 5,
             ],
-            'reconciled_at' => now('UTC'),
+            'reconciled_at' => $now,
+            'pending_review_at' => $now,
+            'confirmed_at' => null,
         ];
     }
 }

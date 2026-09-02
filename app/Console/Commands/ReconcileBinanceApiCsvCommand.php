@@ -33,8 +33,11 @@ class ReconcileBinanceApiCsvCommand extends Command
             fn (int $value, string $label): array => [$label, $value],
         )->values()->all());
 
-        if ($apply && ($stats['reconciled'] ?? 0) > 0) {
-            $this->warn('Execute o recálculo FIFO explicitamente para aplicar a seleção canônica.');
+        if ($apply && ($stats['confirmed'] ?? 0) > 0) {
+            $this->warn('Somente matches determinísticos foram confirmados. Execute o recálculo FIFO explicitamente.');
+        }
+        if ($apply && ($stats['pending_review'] ?? 0) > 0) {
+            $this->warn('Matches heurísticos ficaram pendentes e não alteram o FIFO até confirmação explícita.');
         }
 
         return self::SUCCESS;

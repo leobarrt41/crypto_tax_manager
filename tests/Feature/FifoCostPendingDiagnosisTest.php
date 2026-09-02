@@ -41,7 +41,9 @@ class FifoCostPendingDiagnosisTest extends TestCase
             ->assertOk()
             ->assertJsonPath('diagnoses.0.primary_category', 'convert_documented_value_not_recognized')
             ->assertJsonPath('diagnoses.0.confidence', 'high')
-            ->assertJsonPath('diagnoses.0.historical_quote_is_documentary', true)
+            ->assertJsonPath('diagnoses.0.historical_quote_is_documentary', false)
+            ->assertJsonPath('diagnoses.0.documented_value_available', true)
+            ->assertJsonPath('diagnoses.0.cost_evidence_kind', 'binance_annual_csv_received_value_brl')
             ->assertJsonPath('diagnoses.0.pending_quantity', '123.456789012000');
 
         $this->assertSame($original, $source->fresh()->getAttributes());
@@ -62,7 +64,9 @@ class FifoCostPendingDiagnosisTest extends TestCase
             ->assertJsonPath('diagnoses.0.primary_category', 'historical_quote_only_estimated')
             ->assertJsonPath('diagnoses.0.secondary_category', 'convert_missing_documented_received_value')
             ->assertJsonPath('diagnoses.0.historical_quote_available', true)
-            ->assertJsonPath('diagnoses.0.historical_quote_is_documentary', false);
+            ->assertJsonPath('diagnoses.0.historical_quote_is_documentary', false)
+            ->assertJsonPath('diagnoses.0.documented_value_available', false)
+            ->assertJsonPath('diagnoses.0.cost_evidence_kind', 'historical_market_quote');
 
         $this->assertSame(FifoInventoryGap::COST_ESTIMATED, $source->fresh()->to_cost_status);
     }

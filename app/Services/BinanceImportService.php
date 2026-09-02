@@ -366,6 +366,7 @@ class BinanceImportService
             [
                 'source_type' => UserApiKey::class,
                 'source_id' => $this->apiKey->id,
+                'import_origin' => 'binance_api',
                 'type' => 'deposit',
                 'operation' => 'entrada',
                 'to_asset' => $asset,
@@ -402,6 +403,7 @@ class BinanceImportService
             [
                 'source_type' => UserApiKey::class,
                 'source_id' => $this->apiKey->id,
+                'import_origin' => 'binance_api',
                 'type' => 'withdrawal',
                 'operation' => 'saida',
                 'from_asset' => $asset,
@@ -1244,6 +1246,7 @@ class BinanceImportService
         $transaction->fill([
             'source_type' => 'App\\Models\\UserApiKey',
             'source_id' => $this->apiKey->id,
+            'import_origin' => 'binance_api',
             'type' => 'trade',
             'from_asset' => $fromAsset,
             'from_amount' => $fromAmount,
@@ -1296,6 +1299,7 @@ class BinanceImportService
         $transaction->fill([
             'source_type' => 'App\\Models\\UserApiKey',
             'source_id' => $this->apiKey->id,
+            'import_origin' => 'binance_api',
             'type' => 'convert',
             'from_asset' => $fromAssetSymbol,
             'from_amount' => (float) $conv['fromAmount'],

@@ -11,6 +11,7 @@ use App\Models\UserApiKey;
 use App\Services\BinanceApiCsvReconciliationService;
 use App\Services\BinanceImportService;
 use App\Services\FifoCalculatorService;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Artisan;
@@ -43,21 +44,29 @@ class BinanceApiCsvReconciliationTest extends TestCase
     public function test_reconciliation_preserves_raw_records_and_fifo_uses_only_documented_csv_convert(): void
     {
         $this->transaction('buy', 'BRL', '2400', 'USDT', '400', '2025-01-01 08:00:00', '2400');
-        $api = $this->apiConvert('api-quote-1');
-        $csv = $this->csvConvert('csv-row-1');
+        $api = $this->apiConvert('api-quote-1', ['txid' => 'stable-event-1']);
+        $csv = $this->csvConvert('csv-row-1', ['txid' => 'stable-event-1']);
         $sale = $this->transaction('sell', '1MBABYDOGE', '122216.76', 'BRL', '3000', '2025-01-03 08:00:00', '3000');
         $apiRaw = $this->rawFields($api);
         $csvRaw = $this->rawFields($csv);
 
         $result = app(BinanceApiCsvReconciliationService::class)->reconcileTransaction($csv);
 
-        $this->assertSame('reconciled', $result['status']);
+        $this->assertSame('pending_review', $result['status']);
         $reconciliation = TransactionReconciliation::query()->sole();
         $this->assertSame($csv->id, $reconciliation->canonical_transaction_id);
         $this->assertSame($api->id, $reconciliation->matched_transaction_id);
-        $this->assertSame('2513.2905916201', $reconciliation->matching_evidence['csv_received_value_brl']);
+        $this->assertSame('high', $reconciliation->confidence);
+        $this->assertSame('txid', $reconciliation->matching_evidence['stable_id']['field']);
         $this->assertSame($apiRaw, $this->rawFields($api->fresh()));
         $this->assertSame($csvRaw, $this->rawFields($csv->fresh()));
+
+        app(BinanceApiCsvReconciliationService::class)->transition(
+            $reconciliation,
+            TransactionReconciliation::STATUS_CONFIRMED,
+            $this->user,
+            'Identificador estável conferido no teste.',
+        );
 
         $stats = app(FifoCalculatorService::class)->recalculateForUser($this->user->id);
 
@@ -88,6 +97,7 @@ class BinanceApiCsvReconciliationTest extends TestCase
         ])->assertRedirect(route('transactions.index'));
 
         $reconciliation = TransactionReconciliation::query()->sole();
+        $this->assertSame(TransactionReconciliation::STATUS_PENDING_REVIEW, $reconciliation->status);
         $this->assertSame($api->id, $reconciliation->matched_transaction_id);
         $this->assertSame('csv-reference', $reconciliation->canonicalTransaction->reference);
         $this->assertDatabaseCount('transactions', 2);
@@ -119,7 +129,7 @@ class BinanceApiCsvReconciliationTest extends TestCase
         $this->assertNull($legacy->fresh()->import_metadata);
 
         $stats = app(BinanceApiCsvReconciliationService::class)->reconcileUserYear($this->user->id, 2025);
-        $this->assertSame(1, $stats['csv_transactions_scanned']);
+        $this->assertSame(0, $stats['csv_transactions_scanned']);
         app(FifoCalculatorService::class)->recalculateForUser($this->user->id);
         $this->assertSame(FifoInventoryGap::COST_KNOWN, $legacy->fresh()->to_cost_status);
         $this->assertSame(2513.2905916201, (float) $sale->fresh()->cost_basis_brl);
@@ -169,6 +179,7 @@ class BinanceApiCsvReconciliationTest extends TestCase
         ]);
 
         $reconciliation = TransactionReconciliation::query()->sole();
+        $this->assertSame(TransactionReconciliation::STATUS_PENDING_REVIEW, $reconciliation->status);
         $this->assertSame($csv->id, $reconciliation->canonical_transaction_id);
         $this->assertSame('api-after-csv', $reconciliation->matchedTransaction->reference);
     }
@@ -186,9 +197,9 @@ class BinanceApiCsvReconciliationTest extends TestCase
         $this->assertDatabaseCount('transaction_reconciliations', 0);
 
         $api->delete();
-        $this->assertSame('reconciled', $service->reconcileTransaction($csv)['status']);
+        $this->assertSame('pending_review', $service->reconcileTransaction($csv)['status']);
         $this->assertSame('already_reconciled', $service->reconcileTransaction($csv)['status']);
-        $this->assertDatabaseCount('transaction_reconciliations', 1);
+        $this->assertDatabaseHas('transaction_reconciliations', ['status' => TransactionReconciliation::STATUS_PENDING_REVIEW]);
     }
 
     public function test_command_is_dry_run_by_default_and_requires_apply_to_persist(): void
@@ -210,13 +221,215 @@ class BinanceApiCsvReconciliationTest extends TestCase
         $this->assertDatabaseCount('transaction_reconciliations', 1);
     }
 
-    private function apiConvert(string $reference): Transaction
+    public function test_api_with_non_null_metadata_is_identified_by_explicit_origin(): void
+    {
+        $api = $this->apiConvert('api-with-payload', [
+            'import_metadata' => ['endpoint' => '/sapi/v1/convert/tradeFlow'],
+        ]);
+        $csv = $this->csvConvert('csv-without-common-id');
+
+        $result = app(BinanceApiCsvReconciliationService::class)->reconcileTransaction($api);
+
+        $this->assertSame('pending_review', $result['status']);
+        $this->assertSame('binance_api', $api->fresh()->import_origin);
+        $this->assertSame($csv->id, $result['reconciliation']->canonical_transaction_id);
+    }
+
+    public function test_heuristic_match_does_not_change_fifo_until_explicit_confirmation(): void
+    {
+        $this->transaction('buy', 'BRL', '2400', 'USDT', '800', '2025-01-01 08:00:00', '2400');
+        $this->apiConvert('api-heuristic');
+        $csv = $this->csvConvert('csv-heuristic');
+        $this->transaction('sell', '1MBABYDOGE', '122216.76', 'BRL', '3000', '2025-01-03 08:00:00', '3000');
+
+        $result = app(BinanceApiCsvReconciliationService::class)->reconcileTransaction($csv);
+        $this->assertSame(TransactionReconciliation::STATUS_PENDING_REVIEW, $result['reconciliation']->status);
+        $this->assertSame(4, app(FifoCalculatorService::class)->recalculateForUser($this->user->id)['transactions_read']);
+
+        app(BinanceApiCsvReconciliationService::class)
+            ->transition($result['reconciliation'], TransactionReconciliation::STATUS_CONFIRMED, $this->user);
+        $this->assertSame(3, app(FifoCalculatorService::class)->recalculateForUser($this->user->id)['transactions_read']);
+    }
+
+    public function test_one_csv_cannot_reconcile_two_api_rows_and_ambiguous_match_is_not_persisted(): void
+    {
+        $this->apiConvert('api-a');
+        $this->apiConvert('api-b');
+        $csv = $this->csvConvert('csv-only');
+
+        $result = app(BinanceApiCsvReconciliationService::class)->reconcileTransaction($csv);
+
+        $this->assertSame('ambiguous', $result['status']);
+        $this->assertSame(2, $result['candidates']);
+        $this->assertDatabaseCount('transaction_reconciliations', 0);
+    }
+
+    public function test_reconciled_transaction_deletion_is_blocked_to_preserve_audit(): void
+    {
+        $api = $this->apiConvert('api-delete', ['txid' => 'stable-delete']);
+        $csv = $this->csvConvert('csv-delete', ['txid' => 'stable-delete']);
+        $service = app(BinanceApiCsvReconciliationService::class);
+        $pending = $service->reconcileTransaction($csv)['reconciliation'];
+        $service->transition($pending, TransactionReconciliation::STATUS_CONFIRMED, $this->user);
+
+        try {
+            $api->delete();
+            $this->fail('A exclusão deveria ter sido bloqueada.');
+        } catch (\LogicException) {
+            $this->assertDatabaseCount('transaction_reconciliations', 1);
+            $this->assertDatabaseCount('transaction_reconciliation_events', 1);
+        }
+    }
+
+    public function test_database_prevents_one_csv_from_reconciling_two_api_transactions(): void
+    {
+        $api = $this->apiConvert('api-unique-a', ['txid' => 'unique-a']);
+        $csv = $this->csvConvert('csv-unique', ['txid' => 'unique-a']);
+        $first = app(BinanceApiCsvReconciliationService::class)->reconcileTransaction($csv)['reconciliation'];
+        $otherApi = $this->apiConvert('api-unique-b');
+
+        $this->expectException(QueryException::class);
+        TransactionReconciliation::query()->create([
+            ...$first->only(['user_id', 'canonical_transaction_id', 'match_type', 'confidence', 'fingerprint', 'status', 'matching_evidence', 'reconciled_at']),
+            'matched_transaction_id' => $otherApi->id,
+        ]);
+    }
+
+    public function test_database_prevents_one_api_from_reconciling_two_csv_transactions(): void
+    {
+        $api = $this->apiConvert('api-matched-unique');
+        $firstCsv = $this->csvConvert('csv-matched-a');
+        $first = app(BinanceApiCsvReconciliationService::class)->reconcileTransaction($firstCsv)['reconciliation'];
+        $otherCsv = $this->csvConvert('csv-matched-b', ['date' => '2025-01-02 08:49:38']);
+
+        $this->expectException(QueryException::class);
+        TransactionReconciliation::query()->create([
+            ...$first->only(['user_id', 'matched_transaction_id', 'match_type', 'confidence', 'fingerprint', 'status', 'matching_evidence', 'reconciled_at']),
+            'canonical_transaction_id' => $otherCsv->id,
+        ]);
+    }
+
+    public function test_review_transitions_preserve_evidence_and_each_transition_timestamp(): void
+    {
+        $this->apiConvert('api-review');
+        $csv = $this->csvConvert('csv-review');
+        $service = app(BinanceApiCsvReconciliationService::class);
+        $pending = $service->reconcileTransaction($csv)['reconciliation'];
+        $evidence = $pending->matching_evidence;
+
+        $confirmed = $service->transition($pending, TransactionReconciliation::STATUS_CONFIRMED, $this->user, 'Conferido');
+        $this->assertNotNull($confirmed->pending_review_at);
+        $this->assertNotNull($confirmed->confirmed_at);
+        $this->assertSame($evidence, $confirmed->matching_evidence);
+        $this->assertSame(1, app(FifoCalculatorService::class)->recalculateForUser($this->user->id)['transactions_read']);
+        $this->assertSame(1, app(FifoCalculatorService::class)->recalculateForUser($this->user->id)['transactions_read']);
+
+        $revoked = $service->transition($confirmed, TransactionReconciliation::STATUS_REVOKED, $this->user, 'Revisão posterior');
+        $this->assertNotNull($revoked->revoked_at);
+        $this->assertSame($evidence, $revoked->matching_evidence);
+        $this->assertSame(2, app(FifoCalculatorService::class)->recalculateForUser($this->user->id)['transactions_read']);
+        $this->assertDatabaseHas('transaction_reconciliation_events', [
+            'reconciliation_id' => $pending->id,
+            'actor_user_id' => $this->user->id,
+            'previous_status' => TransactionReconciliation::STATUS_PENDING_REVIEW,
+            'new_status' => TransactionReconciliation::STATUS_CONFIRMED,
+            'reason' => 'Conferido',
+        ]);
+        $this->assertDatabaseHas('transaction_reconciliation_events', [
+            'reconciliation_id' => $pending->id,
+            'actor_user_id' => $this->user->id,
+            'previous_status' => TransactionReconciliation::STATUS_CONFIRMED,
+            'new_status' => TransactionReconciliation::STATUS_REVOKED,
+            'reason' => 'Revisão posterior',
+        ]);
+        $this->assertDatabaseCount('transaction_reconciliation_events', 2);
+    }
+
+    public function test_explicit_manual_origin_is_preserved_without_inference(): void
+    {
+        $manual = $this->transaction('deposit', null, null, 'BTC', '0.1', '2025-01-02 10:00:00', null, [
+            'import_origin' => 'manual',
+        ]);
+
+        $this->assertSame('manual', $manual->fresh()->import_origin);
+    }
+
+    public function test_rejection_is_audited_and_keeps_both_rows_in_fifo(): void
+    {
+        $this->transaction('buy', 'BRL', '2400', 'USDT', '800', '2025-01-01 08:00:00', '2400');
+        $this->apiConvert('api-reject');
+        $csv = $this->csvConvert('csv-reject');
+        $this->transaction('sell', '1MBABYDOGE', '122216.76', 'BRL', '3000', '2025-01-03 08:00:00', '3000');
+        $service = app(BinanceApiCsvReconciliationService::class);
+        $pending = $service->reconcileTransaction($csv)['reconciliation'];
+
+        $rejected = $service->transition($pending, TransactionReconciliation::STATUS_REJECTED, $this->user, 'Não são a mesma operação');
+
+        $this->assertNotNull($rejected->rejected_at);
+        $this->assertSame(4, app(FifoCalculatorService::class)->recalculateForUser($this->user->id)['transactions_read']);
+        $this->assertDatabaseHas('transaction_reconciliation_events', [
+            'reconciliation_id' => $pending->id,
+            'actor_user_id' => $this->user->id,
+            'event_type' => TransactionReconciliation::STATUS_REJECTED,
+            'previous_status' => TransactionReconciliation::STATUS_PENDING_REVIEW,
+            'new_status' => TransactionReconciliation::STATUS_REJECTED,
+        ]);
+    }
+
+    public function test_review_command_requires_actor_and_covers_confirm_reject_revoke_and_invalid_cases(): void
+    {
+        $this->apiConvert('api-command-review');
+        $csv = $this->csvConvert('csv-command-review');
+        $pending = app(BinanceApiCsvReconciliationService::class)->reconcileTransaction($csv)['reconciliation'];
+        $other = User::factory()->create(['email_verified_at' => now()]);
+
+        $this->assertSame(1, Artisan::call('binance:review-reconciliation', [
+            'reconciliation_id' => $pending->id,
+            'decision' => 'confirm',
+            'actor_user_id' => $other->id,
+        ]));
+
+        $this->assertSame(0, Artisan::call('binance:review-reconciliation', [
+            'reconciliation_id' => $pending->id,
+            'decision' => 'confirm',
+            'actor_user_id' => $this->user->id,
+        ]));
+        $this->assertSame(0, Artisan::call('binance:review-reconciliation', [
+            'reconciliation_id' => $pending->id,
+            'decision' => 'revoke',
+            'actor_user_id' => $this->user->id,
+        ]));
+        $this->assertSame(1, Artisan::call('binance:review-reconciliation', [
+            'reconciliation_id' => 999999,
+            'decision' => 'confirm',
+            'actor_user_id' => $this->user->id,
+        ]));
+
+        $this->apiConvert('api-command-reject');
+        $rejectCsv = $this->csvConvert('csv-command-reject');
+        $rejectPending = app(BinanceApiCsvReconciliationService::class)->reconcileTransaction($rejectCsv)['reconciliation'];
+        $this->assertSame(0, Artisan::call('binance:review-reconciliation', [
+            'reconciliation_id' => $rejectPending->id,
+            'decision' => 'reject',
+            'actor_user_id' => $this->user->id,
+        ]));
+        $this->assertSame(1, Artisan::call('binance:review-reconciliation', [
+            'reconciliation_id' => $rejectPending->id,
+            'decision' => 'confirm',
+            'actor_user_id' => $this->user->id,
+        ]));
+        $this->assertDatabaseCount('transaction_reconciliation_events', 3);
+    }
+
+    private function apiConvert(string $reference, array $attributes = []): Transaction
     {
         return $this->transaction('convert', 'USDT', '400', '1MBABYDOGE', '122216.76', '2025-01-02 08:48:38', '2518.58', [
             'reference' => $reference,
+            'import_origin' => 'binance_api',
             'pricing_status' => 'completed',
             'to_cost_status' => FifoInventoryGap::COST_ESTIMATED,
             'to_cost_evidence_type' => 'historical_market_quote',
+            ...$attributes,
         ]);
     }
 
@@ -224,6 +437,7 @@ class BinanceApiCsvReconciliationTest extends TestCase
     {
         return $this->transaction('convert', 'USDT', '400', '1MBABYDOGE', '122216.76', '2025-01-02 08:48:38', '2518.58', array_merge([
             'reference' => $reference,
+            'import_origin' => 'binance_annual_csv',
             'import_metadata' => [
                 'format' => 'binance_annual_csv',
                 'brl_values' => [

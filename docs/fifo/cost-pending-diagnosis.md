@@ -6,7 +6,7 @@ O diagnóstico explica, sem alterar dados, por que uma quantidade localizada ain
 
 O usuário autenticado acessa **Relatórios → Relatório IR → Diagnóstico de custos pendentes** em `/reports/relatorio-ir/cost-pending-diagnosis`. A página consulta o endpoint read-only `/reports/relatorio-ir/cost-pending-diagnosis/data?year=2026`, que aceita também `asset`, `category` e `status=open|resolved`.
 
-O resultado contém contagem por categoria, quantidade decimal pendente, data UTC, transação e lote de origem quando localizáveis, confiança, evidências, campos ausentes e próxima ação. Executar novamente produz a mesma classificação para o mesmo estado do banco e não cria snapshots ou duplicidades.
+O resultado contém contagem por categoria, quantidade decimal pendente, data UTC, transação e lote de origem quando localizáveis, confiança, evidências, campos ausentes e próxima ação. `documented_value_available` informa se há valor documental; `cost_evidence_kind` identifica sua natureza. `historical_quote_available` é reservado à existência de cotação histórica e `historical_quote_is_documentary` nunca transforma uma estimativa em documento. Executar novamente produz a mesma classificação para o mesmo estado do banco e não cria snapshots ou duplicidades.
 
 ## Fontes auditadas
 
