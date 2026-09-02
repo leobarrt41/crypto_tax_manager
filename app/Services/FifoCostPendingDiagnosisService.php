@@ -20,7 +20,10 @@ class FifoCostPendingDiagnosisService
 
     private const ACQUISITION_TYPES = ['buy', 'fiat_buy'];
 
-    public function __construct(private readonly DecimalMath $decimal) {}
+    public function __construct(
+        private readonly DecimalMath $decimal,
+        private readonly TransactionImportEvidenceService $importEvidence,
+    ) {}
 
     /** @return array<string, mixed> */
     public function forUser(User $user, int $year, array $filters = []): array
@@ -133,7 +136,7 @@ class FifoCostPendingDiagnosisService
                 ->orderBy('id')
                 ->get();
             $source = $sources->first(
-                fn (Transaction $candidate): bool => data_get($candidate->import_metadata, 'format') === 'binance_annual_csv',
+                fn (Transaction $candidate): bool => $this->importEvidence->annualCsvMetadata($candidate) !== null,
             ) ?? $sources->first();
 
             if ($source !== null) {
@@ -223,18 +226,19 @@ class FifoCostPendingDiagnosisService
     /** @return array<string, mixed> */
     private function classifyConvert(Transaction $source, array $base): array
     {
-        $brlValues = is_array(data_get($source->import_metadata, 'brl_values'))
-            ? data_get($source->import_metadata, 'brl_values')
+        $metadata = $this->importEvidence->annualCsvMetadata($source) ?? $source->import_metadata;
+        $brlValues = is_array(data_get($metadata, 'brl_values'))
+            ? data_get($metadata, 'brl_values')
             : [];
         $received = $brlValues['received_value_brl'] ?? null;
         $hasDocumentedReceived = $this->isPositive($received)
-            && data_get($source->import_metadata, 'format') === 'binance_annual_csv';
+            && data_get($metadata, 'format') === 'binance_annual_csv';
         $hasHistoricalQuote = $this->isPositive($source->total_brl)
             && ($source->to_cost_evidence_type === 'historical_market_quote' || $source->pricing_status === 'completed');
 
         $evidence = array_replace($base['evidence'], [
             'transaction_type' => $source->type,
-            'import_format' => data_get($source->import_metadata, 'format'),
+            'import_format' => data_get($metadata, 'format'),
             'selected_brl_source' => $brlValues['selected_source'] ?? null,
             'received_value_brl_present' => $this->isPositive($received),
             'total_brl_present' => $this->isPositive($source->total_brl),

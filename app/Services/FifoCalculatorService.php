@@ -38,6 +38,8 @@ class FifoCalculatorService
     // Tipos que representam CONVERSÃO (saída + entrada)
     private const CONVERT_TYPES = ['trade', 'convert', 'swap'];
 
+    public function __construct(private readonly TransactionImportEvidenceService $importEvidence) {}
+
     // ─── API pública ─────────────────────────────────────────────────────────────
 
     /**
@@ -149,6 +151,7 @@ class FifoCalculatorService
                     ->select('matched_transaction_id')
                     ->where('user_id', $userId)
                     ->where('status', TransactionReconciliation::STATUS_CONFIRMED))
+                ->with('documentaryEvidences')
                 ->orderBy('date')
                 ->orderBy('id')
                 ->get();
@@ -618,7 +621,8 @@ class FifoCalculatorService
     /** @return array{cost_brl: ?float, cost_status: string, evidence_type: ?string} */
     private function resolveConvertAcquisitionLeg(Transaction $transaction): array
     {
-        $metadata = is_array($transaction->import_metadata) ? $transaction->import_metadata : [];
+        $metadata = $this->importEvidence->annualCsvMetadata($transaction)
+            ?? (is_array($transaction->import_metadata) ? $transaction->import_metadata : []);
         $brlValues = is_array($metadata['brl_values'] ?? null) ? $metadata['brl_values'] : [];
         $receivedValue = $brlValues['received_value_brl'] ?? null;
 

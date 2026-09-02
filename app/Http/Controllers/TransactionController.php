@@ -12,6 +12,7 @@ use App\Services\BinanceImportService;
 use App\Services\CryptoPriceService;
 use App\Services\FifoCalculatorService;
 use App\Services\TransactionImportCoverageService;
+use App\Services\TransactionImportEvidenceService;
 use Carbon\Carbon;
 use Exception;
 use Illuminate\Http\Request; // ✅ Importa o novo serviço
@@ -710,6 +711,7 @@ class TransactionController extends Controller
         [$headers, $rows] = $this->extractRowsFromImportedFile($uploadedFile->getRealPath(), $extension);
 
         $imported = 0;
+        $documentaryEvidenceAdded = 0;
         $recognizedRows = 0;
 
         $skipDuplicates = (bool) ($validated['skip_duplicates'] ?? true);
@@ -750,8 +752,20 @@ class TransactionController extends Controller
                 }
             }
 
-            if ($skipDuplicates && $this->transactionAlreadyExists($transactionData)) {
-                continue;
+            if ($skipDuplicates) {
+                $existingTransaction = $this->findExistingTransaction($transactionData);
+                if ($existingTransaction !== null) {
+                    if ($isBinanceExchangeImport) {
+                        $evidence = app(TransactionImportEvidenceService::class)
+                            ->attachAnnualCsvEvidence($existingTransaction, $transactionData);
+                        if ($evidence?->wasRecentlyCreated) {
+                            $documentaryEvidenceAdded++;
+                        }
+                        app(BinanceApiCsvReconciliationService::class)->reconcileTransaction($existingTransaction);
+                    }
+
+                    continue;
+                }
             }
 
             $transaction = Transaction::create($transactionData);
@@ -791,6 +805,9 @@ class TransactionController extends Controller
         }
 
         $message = "{$imported} transações importadas com sucesso.";
+        if ($documentaryEvidenceAdded > 0) {
+            $message .= " {$documentaryEvidenceAdded} transações existentes receberam evidência documental do CSV.";
+        }
         if ($isBinanceExchangeImport && count($coveredMonths) > 1) {
             $message .= ' A cobertura foi confirmada para '.count($coveredMonths).' meses identificados no arquivo.';
         }
@@ -1227,6 +1244,11 @@ class TransactionController extends Controller
 
     private function transactionAlreadyExists(array $transactionData): bool
     {
+        return $this->findExistingTransaction($transactionData) !== null;
+    }
+
+    private function findExistingTransaction(array $transactionData): ?Transaction
+    {
         // ── Estratégia 1: deduplicação cross-source por reference ──────────────────
         //
         // Quando a transação tem um identificador único da exchange, verificamos
@@ -1239,7 +1261,7 @@ class TransactionController extends Controller
             return Transaction::query()
                 ->where('user_id', $transactionData['user_id'])
                 ->where('reference', $transactionData['reference'])
-                ->exists();
+                ->first();
         }
 
         // ── Estratégia 2: deduplicação por conteúdo (sem reference) ────────────────
@@ -1264,7 +1286,7 @@ class TransactionController extends Controller
             $query->where('to_amount', $transactionData['to_amount']);
         }
 
-        return $query->exists();
+        return $query->first();
     }
 
     private function extractRowsFromImportedFile(string $filePath, string $extension): array

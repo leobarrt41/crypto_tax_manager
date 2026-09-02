@@ -13,7 +13,10 @@ class BinanceApiCsvReconciliationService
 {
     public const MATCH_TYPE = 'binance_api_csv_convert_v1';
 
-    public function __construct(private readonly DecimalMath $decimal) {}
+    public function __construct(
+        private readonly DecimalMath $decimal,
+        private readonly TransactionImportEvidenceService $importEvidence,
+    ) {}
 
     /** @return array{status:string,reconciliation:?TransactionReconciliation,candidates:int} */
     public function reconcileTransaction(Transaction $transaction, bool $persist = true): array
@@ -114,8 +117,14 @@ class BinanceApiCsvReconciliationService
             ->whereBetween('date', [$date->subSeconds(5), $date->addSeconds(5)])
             ->when(
                 $transactionIsCsv,
-                fn (Builder $query): Builder => $query->where('source_type', UserApiKey::class)->whereNull('import_metadata'),
-                fn (Builder $query): Builder => $query->whereNotNull('import_metadata'),
+                fn (Builder $query): Builder => $query
+                    ->where('source_type', UserApiKey::class)
+                    ->whereNull('import_metadata')
+                    ->whereDoesntHave('documentaryEvidences', fn (Builder $evidence): Builder => $evidence->where('format', 'binance_annual_csv')),
+                fn (Builder $query): Builder => $query->where(function (Builder $csv): void {
+                    $csv->whereNotNull('import_metadata')
+                        ->orWhereHas('documentaryEvidences', fn (Builder $evidence): Builder => $evidence->where('format', 'binance_annual_csv'));
+                }),
             )
             ->orderBy('id');
     }
@@ -135,7 +144,7 @@ class BinanceApiCsvReconciliationService
 
     private function isAnnualCsv(Transaction $transaction): bool
     {
-        return data_get($transaction->import_metadata, 'format') === 'binance_annual_csv';
+        return $this->importEvidence->annualCsvMetadata($transaction) !== null;
     }
 
     private function isApiTransaction(Transaction $transaction): bool
@@ -147,7 +156,7 @@ class BinanceApiCsvReconciliationService
     /** @return array<string, mixed> */
     private function attributes(Transaction $csv, Transaction $api): array
     {
-        $brlValues = data_get($csv->import_metadata, 'brl_values', []);
+        $brlValues = data_get($this->importEvidence->annualCsvMetadata($csv), 'brl_values', []);
         $fingerprintData = [
             'type' => 'convert',
             'from_asset' => strtoupper((string) $csv->from_asset),

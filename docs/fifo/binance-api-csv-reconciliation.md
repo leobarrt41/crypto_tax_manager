@@ -31,6 +31,8 @@ Um candidato exato recebe confiança alta. Zero candidatos não gera relação. 
 
 Primeiro aplique as migrations. A simulação é o comportamento padrão:
 
+Se o CSV foi importado antes de existir `import_metadata`, reimporte o mesmo arquivo com **Ignorar duplicadas** ativado. O importador continuará informando zero novas transações, mas registrará separadamente quantas linhas existentes receberam evidência documental. A tabela `transaction_import_evidences` preserva essa evidência sem reescrever a transação legada.
+
 ```bash
 php artisan binance:reconcile-api-csv USER_ID 2025
 ```

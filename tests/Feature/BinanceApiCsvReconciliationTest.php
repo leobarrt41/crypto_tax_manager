@@ -93,6 +93,39 @@ class BinanceApiCsvReconciliationTest extends TestCase
         $this->assertDatabaseCount('transactions', 2);
     }
 
+    public function test_reimport_enriches_legacy_same_reference_without_creating_another_transaction(): void
+    {
+        $this->transaction('buy', 'BRL', '2400', 'USDT', '400', '2025-01-01 08:00:00', '2400');
+        $legacy = $this->apiConvert('legacy-reference');
+        $sale = $this->transaction('sell', '1MBABYDOGE', '122216.76', 'BRL', '3000', '2025-01-03 08:00:00', '3000');
+        $this->withoutMiddleware(\App\Http\Middleware\VerifyCsrfToken::class);
+        $csv = implode("\n", [
+            'id,datetime_tz_GMT-03:00,type,label,market_model_type,order_type,sent_amount,sent_currency,sent_value_BRL,sent_address,received_amount,received_currency,received_value_BRL,received_address,fee_amount,fee_currency,fee_value_BRL',
+            'legacy-reference,2025-01-02 08:48:38,Trade,,CONVERT,,400,USDT,2518.58,,122216.76,1MBABYDOGE,2513.2905916201,,0,,0',
+        ]);
+
+        $this->actingAs($this->user)->post(route('transactions.import.csv'), [
+            'file' => UploadedFile::fake()->createWithContent('2025.csv', $csv),
+            'format' => 'binance',
+            'skip_duplicates' => true,
+            'source_type' => 'exchange',
+            'source_id' => $this->apiKey->id,
+            'coverage_year' => 2025,
+            'coverage_month' => 1,
+        ])->assertSessionHas('success', fn (string $message): bool => str_contains($message, '1 transações existentes receberam evidência documental'));
+
+        $this->assertDatabaseCount('transactions', 3);
+        $this->assertDatabaseCount('transaction_import_evidences', 1);
+        $this->assertNull($legacy->fresh()->import_metadata);
+
+        $stats = app(BinanceApiCsvReconciliationService::class)->reconcileUserYear($this->user->id, 2025);
+        $this->assertSame(1, $stats['csv_transactions_scanned']);
+        app(FifoCalculatorService::class)->recalculateForUser($this->user->id);
+        $this->assertSame(FifoInventoryGap::COST_KNOWN, $legacy->fresh()->to_cost_status);
+        $this->assertSame(2513.2905916201, (float) $sale->fresh()->cost_basis_brl);
+        $this->assertDatabaseCount('fifo_inventory_gaps', 0);
+    }
+
     public function test_automatic_api_import_reconciles_when_csv_was_imported_first(): void
     {
         $csv = $this->csvConvert('csv-first');

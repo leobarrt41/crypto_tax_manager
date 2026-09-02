@@ -132,6 +132,11 @@ class Transaction extends Model
         return $this->hasOne(TransactionReconciliation::class, 'matched_transaction_id');
     }
 
+    public function documentaryEvidences(): HasMany
+    {
+        return $this->hasMany(TransactionImportEvidence::class);
+    }
+
     /**
      * Taxa da operação expressa no ativo enviado por uma unidade do ativo recebido.
      * Não representa, por si só, um preço em USD ou BRL.
