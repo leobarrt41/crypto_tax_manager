@@ -15,9 +15,11 @@ class TransactionImportEvidenceService
     {
         $metadata = $mapped['import_metadata'] ?? null;
         $reference = (string) ($mapped['reference'] ?? '');
-        if (! is_array($metadata)
+        if ($transaction->import_origin !== 'binance_api'
+            || ! is_array($metadata)
             || ($metadata['format'] ?? null) !== 'binance_annual_csv'
             || $reference === ''
+            || $this->commonStableId($transaction, $mapped) === null
             || ! $this->sameEconomicEvent($transaction, $mapped)) {
             return null;
         }
@@ -76,21 +78,24 @@ class TransactionImportEvidenceService
             return false;
         }
 
-        // A coluna `date` atual é timestamp sem timezone. O importador legado
-        // persistia o horário de parede do CSV; compare a representação que
-        // efetivamente vai ao banco para não introduzir um deslocamento de 3h.
-        $storedDate = CarbonImmutable::createFromFormat(
-            'Y-m-d H:i:s',
-            CarbonImmutable::parse($transaction->date)->format('Y-m-d H:i:s'),
-            'UTC',
-        );
-        $mappedDate = CarbonImmutable::createFromFormat(
-            'Y-m-d H:i:s',
-            CarbonImmutable::parse($mapped['date'])->format('Y-m-d H:i:s'),
-            'UTC',
-        );
+        $storedDate = CarbonImmutable::parse($transaction->date)->utc();
+        $mappedDate = CarbonImmutable::parse($mapped['date'])->utc();
 
         return abs($storedDate->diffInSeconds($mappedDate, false)) <= 5;
+    }
+
+    /** @return array{field:string,value:string}|null */
+    private function commonStableId(Transaction $transaction, array $mapped): ?array
+    {
+        foreach (['reference', 'txid', 'order_id', 'trade_id'] as $field) {
+            $stored = trim((string) $transaction->{$field});
+            $incoming = trim((string) ($mapped[$field] ?? ''));
+            if ($stored !== '' && hash_equals($stored, $incoming)) {
+                return ['field' => $field, 'value' => $stored];
+            }
+        }
+
+        return null;
     }
 
     private function sameDecimal(mixed $left, mixed $right): bool

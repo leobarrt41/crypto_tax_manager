@@ -2,10 +2,10 @@
 
 namespace App\Services;
 
-use App\Models\FifoInventoryGap;
-use App\Models\FifoOpeningBalance;
-use App\Models\TaxMonthlySummary;
 use App\Models\Transaction;
+use App\Models\TaxMonthlySummary;
+use App\Models\FifoOpeningBalance;
+use App\Models\FifoInventoryGap;
 use App\Models\TransactionReconciliation;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
@@ -38,7 +38,9 @@ class FifoCalculatorService
     // Tipos que representam CONVERSÃO (saída + entrada)
     private const CONVERT_TYPES = ['trade', 'convert', 'swap'];
 
-    public function __construct(private readonly TransactionImportEvidenceService $importEvidence) {}
+    public function __construct(private readonly TransactionImportEvidenceService $importEvidence)
+    {
+    }
 
     // ─── API pública ─────────────────────────────────────────────────────────────
 
@@ -46,16 +48,16 @@ class FifoCalculatorService
      * Recalcula o FIFO para um usuário específico (ou todos os usuários).
      *
      * @param  int|null  $userId  null = todos os usuários
-     * @return array Estatísticas do processamento
+     * @return array  Estatísticas do processamento
      */
     public function recalculate(?int $userId = null, ?int $fiscalYear = null): array
     {
         $stats = [
-            'users_processed' => 0,
-            'transactions_read' => 0,
-            'saidas_processed' => 0,
-            'opening_lots_loaded' => 0,
-            'errors' => [],
+            'users_processed'      => 0,
+            'transactions_read'    => 0,
+            'saidas_processed'     => 0,
+            'opening_lots_loaded'  => 0,
+            'errors'               => [],
         ];
 
         $query = User::query();
@@ -69,8 +71,8 @@ class FifoCalculatorService
             try {
                 $result = $this->recalculateForUser($user->id, $fiscalYear);
                 $stats['users_processed']++;
-                $stats['transactions_read'] += $result['transactions_read'];
-                $stats['saidas_processed'] += $result['saidas_processed'];
+                $stats['transactions_read']   += $result['transactions_read'];
+                $stats['saidas_processed']    += $result['saidas_processed'];
                 $stats['opening_lots_loaded'] += $result['opening_lots_loaded'];
             } catch (\Throwable $e) {
                 $msg = "Erro ao processar user_id={$user->id}: {$e->getMessage()}";
@@ -121,13 +123,13 @@ class FifoCalculatorService
 
             // ── 2. Zerar campos fiscais somente no escopo recalculado ───────────
             (clone $transactionsQuery)->update([
-                'cost_basis_brl' => null,
+                'cost_basis_brl'  => null,
                 'profit_loss_brl' => null,
-                'fifo_lots' => null,
-                'fifo_processed' => false,
-                'fifo_status' => null,
+                'fifo_lots'       => null,
+                'fifo_processed'  => false,
+                'fifo_status'     => null,
                 'quantity_status' => null,
-                'cost_status' => null,
+                'cost_status'     => null,
                 'from_quantity_status' => null,
                 'from_cost_status' => null,
                 'from_cost_evidence_type' => null,
@@ -157,8 +159,8 @@ class FifoCalculatorService
                 ->get();
 
             $stats = [
-                'transactions_read' => $transactions->count(),
-                'saidas_processed' => 0,
+                'transactions_read'   => $transactions->count(),
+                'saidas_processed'    => 0,
                 'opening_lots_loaded' => $openingBalances->count(),
                 'recalculated_from_year' => $startYear,
                 'fifo_gaps_open' => 0,
@@ -270,12 +272,12 @@ class FifoCalculatorService
      */
     public function calculateFor(Transaction $sale)
     {
-        if (! in_array($sale->operation, ['saida']) || ! $sale->to_asset || ! $sale->to_amount) {
+        if (!in_array($sale->operation, ['saida']) || !$sale->to_asset || !$sale->to_amount) {
             return null;
         }
 
-        $userId = $sale->user_id;
-        $asset = $sale->to_asset;
+        $userId    = $sale->user_id;
+        $asset     = $sale->to_asset;
         $remaining = (float) $sale->to_amount;
         $totalCost = 0;
 
@@ -296,8 +298,8 @@ class FifoCalculatorService
                 if ($available <= 0) {
                     continue;
                 }
-                $used = min($remaining, $available);
-                $unitCost = $buy->price ?? 0;
+                $used       = min($remaining, $available);
+                $unitCost   = $buy->price ?? 0;
                 $totalCost += $unitCost * $used;
 
                 $buy->remaining_quantity -= $used;
@@ -313,8 +315,8 @@ class FifoCalculatorService
                 Log::warning("Transação {$sale->id} possui quantidade superior ao disponível em FIFO.");
             }
 
-            $saleValue = $sale->total_brl ?? 0;
-            $profit = $saleValue - $totalCost;
+            $saleValue        = $sale->total_brl ?? 0;
+            $profit           = $saleValue - $totalCost;
             $sale->profit_loss = $profit;
             $sale->save();
 
@@ -323,8 +325,7 @@ class FifoCalculatorService
             return $profit;
         } catch (\Exception $e) {
             DB::rollBack();
-            Log::error('Erro no cálculo FIFO: '.$e->getMessage());
-
+            Log::error("Erro no cálculo FIFO: " . $e->getMessage());
             return null;
         }
     }
@@ -333,12 +334,12 @@ class FifoCalculatorService
 
     private function processEntrada(array &$lots, Transaction $tx): void
     {
-        $asset = $tx->to_asset ?? $tx->from_asset;
-        $qty = (float) ($tx->to_amount ?? $tx->from_amount ?? 0);
+        $asset      = $tx->to_asset ?? $tx->from_asset;
+        $qty        = (float) ($tx->to_amount ?? $tx->from_amount ?? 0);
         $costStatus = $this->costStatusForTransaction($tx);
-        $costBrl = $this->costForTransaction($tx);
+        $costBrl    = $this->costForTransaction($tx);
 
-        if (! $asset || $qty <= 0) {
+        if (!$asset || $qty <= 0) {
             return;
         }
 
@@ -365,16 +366,16 @@ class FifoCalculatorService
     ): void {
         $asset = strtoupper(trim($asset));
 
-        if (! isset($lots[$asset])) {
+        if (!isset($lots[$asset])) {
             $lots[$asset] = [];
         }
 
         $lots[$asset][] = [
-            'qty' => $qty,
-            'cost_brl' => $costBrl,
-            'cost_status' => $costStatus,
-            'date' => $date instanceof \Carbon\Carbon ? $date->toDateTimeString() : (string) $date,
-            'source' => $source,
+            'qty'                => $qty,
+            'cost_brl'           => $costBrl,
+            'cost_status'        => $costStatus,
+            'date'               => $date instanceof \Carbon\Carbon ? $date->toDateTimeString() : (string) $date,
+            'source'             => $source,
             'opening_balance_id' => $openingBalanceId,
         ];
     }
@@ -387,7 +388,7 @@ class FifoCalculatorService
     {
         foreach ($openingBalances as $balance) {
             $quantity = (float) $balance->quantity;
-            $costBrl = (float) $balance->total_cost_brl;
+            $costBrl  = (float) $balance->total_cost_brl;
 
             if ($quantity <= 0 || $costBrl < 0 || empty($balance->asset)) {
                 continue;
@@ -407,11 +408,11 @@ class FifoCalculatorService
 
     private function processSaida(array &$lots, Transaction $tx): array
     {
-        $asset = $tx->from_asset ?? $tx->to_asset;
-        $qty = (float) ($tx->from_amount ?? $tx->to_amount ?? 0);
+        $asset    = $tx->from_asset ?? $tx->to_asset;
+        $qty      = (float) ($tx->from_amount ?? $tx->to_amount ?? 0);
         $totalBrl = (float) ($tx->total_brl ?? 0);
 
-        if (! $asset || $qty <= 0) {
+        if (!$asset || $qty <= 0) {
             return ['cost_basis_brl' => 0, 'profit_loss_brl' => 0, 'fifo_lots' => []];
         }
 
@@ -429,7 +430,7 @@ class FifoCalculatorService
         $consumedLots = [];
         $costBasisBrl = 0.0;
         $pendingCostQuantity = 0.0;
-        $remaining = $qty;
+        $remaining    = $qty;
         $availableQuantity = collect($lots[$asset] ?? [])->sum(fn (array $lot) => (float) $lot['qty']);
 
         if (isset($lots[$asset])) {
@@ -438,18 +439,18 @@ class FifoCalculatorService
                     break;
                 }
 
-                $consume = min($lot['qty'], $remaining);
+                $consume      = min($lot['qty'], $remaining);
                 $hasKnownCost = ($lot['cost_status'] ?? FifoInventoryGap::COST_KNOWN) === FifoInventoryGap::COST_KNOWN
                     && $lot['cost_brl'] !== null;
-                $lotCostUnit = $hasKnownCost && $lot['qty'] > 0 ? ($lot['cost_brl'] / $lot['qty']) : null;
+                $lotCostUnit  = $hasKnownCost && $lot['qty'] > 0 ? ($lot['cost_brl'] / $lot['qty']) : null;
                 $consumedCost = $lotCostUnit !== null ? $consume * $lotCostUnit : null;
 
                 $consumedLots[] = [
-                    'lot_date' => $lot['date'],
-                    'lot_qty' => round($consume, 10),
-                    'lot_cost_brl' => $consumedCost !== null ? round($consumedCost, 10) : null,
-                    'cost_status' => $hasKnownCost ? FifoInventoryGap::COST_KNOWN : FifoInventoryGap::COST_PENDING,
-                    'lot_source' => $lot['source'] ?? 'transaction',
+                    'lot_date'           => $lot['date'],
+                    'lot_qty'            => round($consume, 10),
+                    'lot_cost_brl'       => $consumedCost !== null ? round($consumedCost, 10) : null,
+                    'cost_status'        => $hasKnownCost ? FifoInventoryGap::COST_KNOWN : FifoInventoryGap::COST_PENDING,
+                    'lot_source'         => $lot['source'] ?? 'transaction',
                     'opening_balance_id' => $lot['opening_balance_id'] ?? null,
                 ];
 
@@ -459,8 +460,8 @@ class FifoCalculatorService
                 } else {
                     $pendingCostQuantity += $consume;
                 }
-                $lot['qty'] -= $consume;
-                $remaining -= $consume;
+                $lot['qty']      -= $consume;
+                $remaining       -= $consume;
 
                 if ($lot['qty'] <= 1e-10) {
                     unset($lots[$asset][$i]);
@@ -487,11 +488,11 @@ class FifoCalculatorService
 
             // A quantidade pode estar parcialmente ou totalmente identificada,
             // mas nunca compõe ganho fiscal quando o custo não é comprovado.
-            $tx->cost_basis_brl = null;
+            $tx->cost_basis_brl  = null;
             $tx->profit_loss_brl = null;
-            $tx->fifo_lots = json_encode($consumedLots);
-            $tx->fifo_processed = false;
-            $tx->fifo_status = 'incomplete';
+            $tx->fifo_lots       = json_encode($consumedLots);
+            $tx->fifo_processed  = false;
+            $tx->fifo_status     = 'incomplete';
             $this->applyDisposalCompleteness($tx, $quantityIncomplete, true);
             $tx->saveQuietly();
 
@@ -505,19 +506,19 @@ class FifoCalculatorService
 
         $profitLossBrl = $totalBrl - $costBasisBrl;
 
-        $tx->cost_basis_brl = round($costBasisBrl, 10);
+        $tx->cost_basis_brl  = round($costBasisBrl, 10);
         $tx->profit_loss_brl = round($profitLossBrl, 10);
-        $tx->fifo_lots = json_encode($consumedLots);
-        $tx->fifo_processed = true;
-        $tx->fifo_status = 'complete';
+        $tx->fifo_lots       = json_encode($consumedLots);
+        $tx->fifo_processed  = true;
+        $tx->fifo_status     = 'complete';
         $this->applyDisposalCompleteness($tx, false, false);
         $tx->saveQuietly();
 
         return [
-            'cost_basis_brl' => $costBasisBrl,
+            'cost_basis_brl'  => $costBasisBrl,
             'profit_loss_brl' => $profitLossBrl,
-            'fifo_lots' => $consumedLots,
-            'is_incomplete' => false,
+            'fifo_lots'       => $consumedLots,
+            'is_incomplete'   => false,
         ];
     }
 
@@ -685,20 +686,20 @@ class FifoCalculatorService
 
     private function updateMonthly(array &$monthly, Transaction $tx, array $result): void
     {
-        $date = $tx->date instanceof \Carbon\Carbon ? $tx->date : \Carbon\Carbon::parse($tx->date);
-        $year = (int) $date->format('Y');
+        $date  = $tx->date instanceof \Carbon\Carbon ? $tx->date : \Carbon\Carbon::parse($tx->date);
+        $year  = (int) $date->format('Y');
         $month = (int) $date->format('n');
 
-        if (! isset($monthly[$year][$month])) {
+        if (!isset($monthly[$year][$month])) {
             $monthly[$year][$month] = [
                 'alienacoes' => 0.0,
-                'lucro' => 0.0,
-                'prejuizo' => 0.0,
-                'qtd' => 0,
+                'lucro'      => 0.0,
+                'prejuizo'   => 0.0,
+                'qtd'        => 0,
             ];
         }
 
-        $totalBrl = (float) ($tx->total_brl ?? 0);
+        $totalBrl   = (float) ($tx->total_brl ?? 0);
         $profitLoss = (float) $result['profit_loss_brl'];
 
         $monthly[$year][$month]['alienacoes'] += $totalBrl;
@@ -722,12 +723,12 @@ class FifoCalculatorService
                 TaxMonthlySummary::updateOrCreate(
                     ['user_id' => $userId, 'year' => $year, 'month' => $month],
                     [
-                        'total_alienacoes_brl' => round($data['alienacoes'], 2),
-                        'lucro_realizado_brl' => round($data['lucro'], 2),
-                        'prejuizo_realizado_brl' => round($data['prejuizo'], 2),
-                        'resultado_liquido_brl' => round($resultado, 2),
-                        'qtd_operacoes' => $data['qtd'],
-                        'calculated_at' => $now,
+                        'total_alienacoes_brl'   => round($data['alienacoes'], 2),
+                        'lucro_realizado_brl'     => round($data['lucro'], 2),
+                        'prejuizo_realizado_brl'  => round($data['prejuizo'], 2),
+                        'resultado_liquido_brl'   => round($resultado, 2),
+                        'qtd_operacoes'           => $data['qtd'],
+                        'calculated_at'           => $now,
                     ]
                 );
             }

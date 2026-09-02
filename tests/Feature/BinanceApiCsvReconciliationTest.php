@@ -11,6 +11,7 @@ use App\Models\UserApiKey;
 use App\Services\BinanceApiCsvReconciliationService;
 use App\Services\BinanceImportService;
 use App\Services\FifoCalculatorService;
+use Carbon\Carbon;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
@@ -96,17 +97,20 @@ class BinanceApiCsvReconciliationTest extends TestCase
             'coverage_month' => 1,
         ])->assertRedirect(route('transactions.index'));
 
+        $this->assertDatabaseCount('transactions', 2);
         $reconciliation = TransactionReconciliation::query()->sole();
         $this->assertSame(TransactionReconciliation::STATUS_PENDING_REVIEW, $reconciliation->status);
         $this->assertSame($api->id, $reconciliation->matched_transaction_id);
         $this->assertSame('csv-reference', $reconciliation->canonicalTransaction->reference);
         $this->assertDatabaseCount('transactions', 2);
+        $this->assertDatabaseCount('transaction_import_evidences', 0);
+        $this->assertSame(2, app(FifoCalculatorService::class)->recalculateForUser($this->user->id)['transactions_read']);
     }
 
-    public function test_reimport_enriches_legacy_same_reference_without_creating_another_transaction(): void
+    public function test_reimport_enriches_api_same_reference_without_creating_another_transaction(): void
     {
         $this->transaction('buy', 'BRL', '2400', 'USDT', '400', '2025-01-01 08:00:00', '2400');
-        $legacy = $this->apiConvert('legacy-reference');
+        $api = $this->apiConvert('legacy-reference', ['date' => '2025-01-02 11:48:38']);
         $sale = $this->transaction('sell', '1MBABYDOGE', '122216.76', 'BRL', '3000', '2025-01-03 08:00:00', '3000');
         $this->withoutMiddleware(\App\Http\Middleware\VerifyCsrfToken::class);
         $csv = implode("\n", [
@@ -124,19 +128,30 @@ class BinanceApiCsvReconciliationTest extends TestCase
             'coverage_month' => 1,
         ])->assertSessionHas('success', fn (string $message): bool => str_contains($message, '1 transações existentes receberam evidência documental'));
 
+        $this->actingAs($this->user)->post(route('transactions.import.csv'), [
+            'file' => UploadedFile::fake()->createWithContent('2025.csv', $csv),
+            'format' => 'binance',
+            'skip_duplicates' => true,
+            'source_type' => 'exchange',
+            'source_id' => $this->apiKey->id,
+            'coverage_year' => 2025,
+            'coverage_month' => 1,
+        ])->assertRedirect(route('transactions.index'));
+
         $this->assertDatabaseCount('transactions', 3);
         $this->assertDatabaseCount('transaction_import_evidences', 1);
-        $this->assertNull($legacy->fresh()->import_metadata);
+        $this->assertDatabaseCount('transaction_reconciliations', 0);
+        $this->assertNull($api->fresh()->import_metadata);
 
         $stats = app(BinanceApiCsvReconciliationService::class)->reconcileUserYear($this->user->id, 2025);
         $this->assertSame(0, $stats['csv_transactions_scanned']);
         app(FifoCalculatorService::class)->recalculateForUser($this->user->id);
-        $this->assertSame(FifoInventoryGap::COST_KNOWN, $legacy->fresh()->to_cost_status);
+        $this->assertSame(FifoInventoryGap::COST_KNOWN, $api->fresh()->to_cost_status);
         $this->assertSame(2513.2905916201, (float) $sale->fresh()->cost_basis_brl);
         $this->assertDatabaseCount('fifo_inventory_gaps', 0);
     }
 
-    public function test_legacy_evidence_accepts_csv_quantities_expressed_in_scientific_notation(): void
+    public function test_legacy_unknown_never_receives_csv_evidence_automatically(): void
     {
         $legacy = $this->transaction('convert', 'USDT', '0.0000000100', 'SHIB', '1000', '2025-01-02 08:48:38', null, [
             'reference' => 'scientific-reference',
@@ -159,8 +174,79 @@ class BinanceApiCsvReconciliationTest extends TestCase
         $evidence = app(\App\Services\TransactionImportEvidenceService::class)
             ->attachAnnualCsvEvidence($legacy, $mapped);
 
-        $this->assertNotNull($evidence);
+        $this->assertNull($evidence);
+        $this->assertDatabaseCount('transaction_import_evidences', 0);
+    }
+
+    public function test_same_stable_reference_with_divergent_economic_event_does_not_attach_evidence(): void
+    {
+        $api = $this->apiConvert('stable-divergent');
+        $mapped = [
+            'type' => 'sell',
+            'from_asset' => 'BTC',
+            'from_amount' => '401',
+            'to_asset' => '1MBABYDOGE',
+            'to_amount' => '122216.76',
+            'date' => $api->date,
+            'reference' => 'stable-divergent',
+            'import_metadata' => ['format' => 'binance_annual_csv'],
+        ];
+
+        $evidence = app(\App\Services\TransactionImportEvidenceService::class)
+            ->attachAnnualCsvEvidence($api, $mapped);
+
+        $this->assertNull($evidence);
+        $this->assertDatabaseCount('transaction_import_evidences', 0);
+    }
+
+    public function test_same_wall_clock_in_utc_and_brt_but_more_than_five_seconds_apart_does_not_attach_evidence(): void
+    {
+        $api = $this->apiConvert('timezone-reference', [
+            'date' => '2025-01-02 08:48:38+00:00',
+        ]);
+        $mapped = [
+            'type' => 'convert',
+            'from_asset' => 'USDT',
+            'from_amount' => '400',
+            'to_asset' => '1MBABYDOGE',
+            'to_amount' => '122216.76',
+            'date' => Carbon::parse('2025-01-02 08:48:38', 'America/Sao_Paulo'),
+            'reference' => 'timezone-reference',
+            'import_metadata' => ['format' => 'binance_annual_csv'],
+        ];
+
+        $evidence = app(\App\Services\TransactionImportEvidenceService::class)
+            ->attachAnnualCsvEvidence($api, $mapped);
+
+        $this->assertNull($evidence);
+        $this->assertDatabaseCount('transaction_import_evidences', 0);
+    }
+
+    public function test_stable_evidence_reimport_is_idempotent(): void
+    {
+        $api = $this->apiConvert('idempotent-reference');
+        $mapped = [
+            'type' => 'convert',
+            'from_asset' => 'USDT',
+            'from_amount' => '400',
+            'to_asset' => '1MBABYDOGE',
+            'to_amount' => '122216.76',
+            'date' => $api->date,
+            'reference' => 'idempotent-reference',
+            'import_metadata' => [
+                'format' => 'binance_annual_csv',
+                'brl_values' => ['received_value_brl' => '2513.2905916201'],
+            ],
+        ];
+        $service = app(\App\Services\TransactionImportEvidenceService::class);
+
+        $first = $service->attachAnnualCsvEvidence($api, $mapped);
+        $second = $service->attachAnnualCsvEvidence($api, $mapped);
+
+        $this->assertSame($first?->id, $second?->id);
         $this->assertDatabaseCount('transaction_import_evidences', 1);
+        $this->assertDatabaseCount('transaction_reconciliations', 0);
+        $this->assertDatabaseCount('transactions', 1);
     }
 
     public function test_automatic_api_import_reconciles_when_csv_was_imported_first(): void

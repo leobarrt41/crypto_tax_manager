@@ -2,12 +2,12 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\FifoInventoryGap;
-use App\Models\FifoOpeningBalance;
 use App\Models\TaxMonthlySummary;
+use App\Models\FifoOpeningBalance;
+use App\Models\FifoInventoryGap;
 use App\Models\Transaction;
-use App\Services\FifoAcquisitionHistoryService;
 use App\Services\FifoCalculatorService;
+use App\Services\FifoAcquisitionHistoryService;
 use App\Services\FifoCostPendingDiagnosisService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -19,7 +19,8 @@ class TaxReportController extends Controller
         private FifoCalculatorService $fifo,
         private FifoAcquisitionHistoryService $acquisitionHistory,
         private FifoCostPendingDiagnosisService $costPendingDiagnosis,
-    ) {}
+    ) {
+    }
 
     // ─── Inertia Page ────────────────────────────────────────────────────────────
 
@@ -77,12 +78,12 @@ class TaxReportController extends Controller
     public function monthlySummary(Request $request)
     {
         $request->validate([
-            'year' => 'required|integer|min:2009|max:2099',
+            'year'  => 'required|integer|min:2009|max:2099',
             'month' => 'nullable|integer|min:1|max:12',
         ]);
 
-        $user = Auth::user();
-        $year = (int) $request->year;
+        $user  = Auth::user();
+        $year  = (int) $request->year;
         $month = $request->month ? (int) $request->month : null;
 
         $query = TaxMonthlySummary::where('user_id', $user->id)
@@ -95,28 +96,28 @@ class TaxReportController extends Controller
 
         $summaries = $query->get()->map(function ($s) {
             return [
-                'mes' => $s->month,
-                'nome_mes' => $s->nome_mes,
-                'ano' => $s->year,
-                'total_alienacoes_brl' => (float) $s->total_alienacoes_brl,
-                'lucro_realizado_brl' => (float) $s->lucro_realizado_brl,
+                'mes'                    => $s->month,
+                'nome_mes'               => $s->nome_mes,
+                'ano'                    => $s->year,
+                'total_alienacoes_brl'   => (float) $s->total_alienacoes_brl,
+                'lucro_realizado_brl'    => (float) $s->lucro_realizado_brl,
                 'prejuizo_realizado_brl' => (float) $s->prejuizo_realizado_brl,
-                'resultado_liquido_brl' => (float) $s->resultado_liquido_brl,
-                'qtd_operacoes' => (int) $s->qtd_operacoes,
-                'calculated_at' => $s->calculated_at?->toISOString(),
+                'resultado_liquido_brl'  => (float) $s->resultado_liquido_brl,
+                'qtd_operacoes'          => (int) $s->qtd_operacoes,
+                'calculated_at'          => $s->calculated_at?->toISOString(),
             ];
         });
 
         return response()->json([
-            'year' => $year,
-            'month' => $month,
+            'year'      => $year,
+            'month'     => $month,
             'summaries' => $summaries,
-            'totals' => [
-                'total_alienacoes_brl' => round($summaries->sum('total_alienacoes_brl'), 2),
-                'lucro_realizado_brl' => round($summaries->sum('lucro_realizado_brl'), 2),
+            'totals'    => [
+                'total_alienacoes_brl'   => round($summaries->sum('total_alienacoes_brl'), 2),
+                'lucro_realizado_brl'    => round($summaries->sum('lucro_realizado_brl'), 2),
                 'prejuizo_realizado_brl' => round($summaries->sum('prejuizo_realizado_brl'), 2),
-                'resultado_liquido_brl' => round($summaries->sum('resultado_liquido_brl'), 2),
-                'qtd_operacoes' => $summaries->sum('qtd_operacoes'),
+                'resultado_liquido_brl'  => round($summaries->sum('resultado_liquido_brl'), 2),
+                'qtd_operacoes'          => $summaries->sum('qtd_operacoes'),
             ],
         ]);
     }
@@ -142,12 +143,12 @@ class TaxReportController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => 'Recálculo FIFO concluído com sucesso.',
-                'stats' => $stats,
+                'stats'   => $stats,
             ]);
         } catch (\Throwable $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Erro ao recalcular FIFO: '.$e->getMessage(),
+                'message' => 'Erro ao recalcular FIFO: ' . $e->getMessage(),
             ], 500);
         }
     }
@@ -232,19 +233,19 @@ class TaxReportController extends Controller
     public function storeOpeningBalance(Request $request)
     {
         $data = $request->validate([
-            'fiscal_year' => 'required|integer|min:2009|max:2099',
-            'asset' => ['required', 'string', 'max:20', 'regex:/^[A-Za-z0-9._-]+$/'],
-            'quantity' => 'required|numeric|gt:0',
+            'fiscal_year'    => 'required|integer|min:2009|max:2099',
+            'asset'          => ['required', 'string', 'max:20', 'regex:/^[A-Za-z0-9._-]+$/'],
+            'quantity'       => 'required|numeric|gt:0',
             'total_cost_brl' => 'required|numeric|min:0',
-            'source' => 'nullable|string|max:100',
-            'notes' => 'nullable|string|max:2000',
+            'source'         => 'nullable|string|max:100',
+            'notes'          => 'nullable|string|max:2000',
             'confirm_manual_correction' => 'nullable|boolean',
         ]);
 
-        $data['asset'] = strtoupper(trim($data['asset']));
+        $data['asset']          = strtoupper(trim($data['asset']));
         $data['reference_date'] = sprintf('%d-12-31', (int) $data['fiscal_year'] - 1);
 
-        if (! $request->boolean('confirm_manual_correction') && $this->hasReconstructedAcquisition(
+        if (!$request->boolean('confirm_manual_correction') && $this->hasReconstructedAcquisition(
             Auth::id(),
             $data['asset'],
             $data['reference_date'],
@@ -258,22 +259,22 @@ class TaxReportController extends Controller
 
         $balance = FifoOpeningBalance::updateOrCreate(
             [
-                'user_id' => Auth::id(),
+                'user_id'     => Auth::id(),
                 'fiscal_year' => $data['fiscal_year'],
-                'asset' => $data['asset'],
+                'asset'       => $data['asset'],
             ],
             [
                 'reference_date' => $data['reference_date'],
-                'quantity' => $data['quantity'],
+                'quantity'       => $data['quantity'],
                 'total_cost_brl' => $data['total_cost_brl'],
-                'source' => $data['source'] ?? null,
-                'notes' => $data['notes'] ?? null,
+                'source'         => $data['source'] ?? null,
+                'notes'          => $data['notes'] ?? null,
             ]
         );
 
         return response()->json([
-            'success' => true,
-            'message' => "Saldo inicial de {$balance->asset} salvo. Execute o recálculo FIFO para aplicá-lo.",
+            'success'         => true,
+            'message'         => "Saldo inicial de {$balance->asset} salvo. Execute o recálculo FIFO para aplicá-lo.",
             'opening_balance' => $this->serializeOpeningBalance($balance),
         ]);
     }
@@ -311,16 +312,16 @@ class TaxReportController extends Controller
     private function serializeOpeningBalance(FifoOpeningBalance $balance): array
     {
         return [
-            'id' => $balance->id,
-            'fiscal_year' => $balance->fiscal_year,
-            'reference_date' => $balance->reference_date?->format('Y-m-d'),
-            'asset' => $balance->asset,
-            'quantity' => (float) $balance->quantity,
-            'total_cost_brl' => (float) $balance->total_cost_brl,
-            'unit_cost_brl' => $balance->unit_cost_brl,
-            'source' => $balance->source,
-            'notes' => $balance->notes,
-            'updated_at' => $balance->updated_at?->toISOString(),
+            'id'               => $balance->id,
+            'fiscal_year'      => $balance->fiscal_year,
+            'reference_date'   => $balance->reference_date?->format('Y-m-d'),
+            'asset'            => $balance->asset,
+            'quantity'         => (float) $balance->quantity,
+            'total_cost_brl'   => (float) $balance->total_cost_brl,
+            'unit_cost_brl'    => $balance->unit_cost_brl,
+            'source'           => $balance->source,
+            'notes'            => $balance->notes,
+            'updated_at'       => $balance->updated_at?->toISOString(),
         ];
     }
 
@@ -331,12 +332,12 @@ class TaxReportController extends Controller
     public function exportCsv(Request $request)
     {
         $request->validate([
-            'year' => 'required|integer|min:2009|max:2099',
+            'year'  => 'required|integer|min:2009|max:2099',
             'month' => 'nullable|integer|min:1|max:12',
         ]);
 
-        $user = Auth::user();
-        $year = (int) $request->year;
+        $user  = Auth::user();
+        $year  = (int) $request->year;
         $month = $request->month ? (int) $request->month : null;
 
         if ($this->acquisitionHistory->hasOpenGaps($user->id, $year, $month)) {
@@ -384,10 +385,10 @@ class TaxReportController extends Controller
             10 => 'Outubro', 11 => 'Novembro', 12 => 'Dezembro',
         ];
 
-        $filename = "relatorio_ir_{$year}".($month ? "_{$month}" : '').'.csv';
+        $filename = "relatorio_ir_{$year}" . ($month ? "_{$month}" : '') . '.csv';
 
         $headers = [
-            'Content-Type' => 'text/csv; charset=UTF-8',
+            'Content-Type'        => 'text/csv; charset=UTF-8',
             'Content-Disposition' => "attachment; filename=\"{$filename}\"",
         ];
 
@@ -395,7 +396,7 @@ class TaxReportController extends Controller
             $handle = fopen('php://output', 'w');
 
             // BOM para Excel reconhecer UTF-8
-            fprintf($handle, chr(0xEF).chr(0xBB).chr(0xBF));
+            fprintf($handle, chr(0xEF) . chr(0xBB) . chr(0xBF));
 
             // Cabeçalho
             fputcsv($handle, [

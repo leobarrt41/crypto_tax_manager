@@ -73,6 +73,8 @@ Ao importar o CSV, o sistema tenta conciliá-lo com Converts automáticos já ex
 - O relatório de transações continua mostrando os dois registros brutos; a relação confirmada define apenas o efeito FIFO.
 - As FKs de transações conciliadas usam exclusão restritiva. Uma transação relacionada não pode desaparecer por cascade; a trilha deve permanecer auditável.
 - Se já houver mais de uma relação para a mesma linha canônica antes da migration incremental, a migration falha antes de alterar o schema e pede revisão manual. Nada é apagado automaticamente.
-- O rollback é bloqueado enquanto houver eventos de auditoria. A trilha precisa ser preservada ou exportada por procedimento explícito antes de remover o schema criado pela migration.
+- O rollback da migration incremental `000003` é bloqueado enquanto existir qualquer evento de auditoria. Não apague eventos para forçar o rollback: a trilha append-only deve ser preservada.
+- O `down()` restaura `cascadeOnDelete` apenas para retornar tecnicamente ao schema anterior. Depois que a auditoria tiver sido usada, isso não é uma ação apropriada para produção, pois voltaria a permitir que relações desaparecessem junto com transações.
+- A migration e os testes da conciliação precisam ser validados em PostgreSQL antes do merge. A aprovação apenas em SQLite não libera integração.
 
-O rollback do código restaura o processamento anterior. A migration é reversível e remove somente as relações de conciliação, nunca as transações. Reverter a relação faz a duplicata voltar a participar do próximo recálculo FIFO.
+O rollback do código restaura o processamento anterior. Em ambiente sem eventos, a migration é tecnicamente reversível e remove somente as relações de conciliação, nunca as transações. Reverter a relação faz a duplicata voltar a participar do próximo recálculo FIFO.
