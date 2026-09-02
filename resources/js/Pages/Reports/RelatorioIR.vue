@@ -98,7 +98,7 @@
         <section v-if="filters.year" class="mb-6 rounded-lg border p-6 shadow"
                  :class="acquisitionHistory.status === 'complete'
                    ? 'border-green-200 bg-green-50 dark:border-emerald-600 dark:bg-emerald-950/40'
-                   : 'border-amber-200 bg-amber-50 dark:border-amber-600 dark:bg-amber-950/40'">
+                   : 'border-amber-300 bg-[#fffbeb] dark:border-slate-700 dark:bg-slate-900'">
           <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <h3 class="text-lg font-semibold text-gray-900">Histórico de aquisição</h3>
@@ -106,7 +106,7 @@
               <p v-else-if="acquisitionHistory.status === 'complete'" class="mt-1 text-sm text-green-800 dark:text-emerald-200">
                 Histórico completo para as saídas registradas em {{ filters.year }}. O relatório fiscal pode ser exportado.
               </p>
-              <p v-else class="mt-1 text-sm leading-6 text-amber-950 dark:text-amber-100">
+              <p v-else class="mt-1 text-sm leading-6 text-amber-950 dark:text-slate-200">
                 <strong>Histórico de aquisição incompleto.</strong> {{ incompleteHistoryMessage }}
               </p>
             </div>
@@ -114,25 +114,25 @@
               Histórico completo
             </div>
             <div v-else class="flex flex-wrap gap-2">
-              <span v-if="quantityMissingCount > 0" class="inline-flex w-fit items-center rounded-full bg-amber-100 px-3 py-1 text-sm font-medium text-amber-950 dark:bg-amber-300 dark:text-amber-950">
+              <span v-if="quantityMissingCount > 0" class="inline-flex w-fit items-center rounded-full bg-rose-100 px-3 py-1 text-sm font-semibold text-rose-800 dark:bg-rose-500/20 dark:text-rose-200 dark:ring-1 dark:ring-inset dark:ring-rose-500/40">
                 {{ quantityMissingCount }} {{ quantityMissingCount === 1 ? 'operação ausente' : 'operações ausentes' }}
               </span>
-              <span v-if="costPendingCount > 0" class="inline-flex w-fit items-center rounded-full bg-orange-100 px-3 py-1 text-sm font-medium text-orange-950 dark:bg-orange-300 dark:text-orange-950">
+              <span v-if="costPendingCount > 0" class="inline-flex w-fit items-center rounded-full bg-amber-100 px-3 py-1 text-sm font-semibold text-amber-900 dark:bg-amber-500/20 dark:text-amber-200 dark:ring-1 dark:ring-inset dark:ring-amber-500/40">
                 {{ costPendingCount }} {{ costPendingCount === 1 ? 'custo pendente' : 'custos pendentes' }}
               </span>
             </div>
           </div>
 
           <template v-if="!loadingAcquisitionHistory && acquisitionHistory.status !== 'complete'">
-            <div class="mt-4 overflow-x-auto rounded-lg border border-amber-300 bg-white dark:border-amber-700 dark:bg-slate-900">
-              <table class="min-w-full divide-y divide-amber-100 dark:divide-amber-800/60">
-                <thead class="bg-amber-100 dark:bg-amber-900/50">
+            <div class="mt-4 overflow-x-auto rounded-lg border border-amber-300 bg-white dark:border-slate-700 dark:bg-slate-950/40">
+              <table class="min-w-full divide-y divide-amber-100 dark:divide-slate-700">
+                <thead class="bg-amber-100 dark:bg-slate-800">
                   <tr>
-                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-amber-950 dark:text-amber-100">Ativo</th>
-                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-amber-950 dark:text-amber-100">Data</th>
-                    <th class="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-amber-950 dark:text-amber-100">Quantidade faltante</th>
-                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-amber-950 dark:text-amber-100">Transação relacionada</th>
-                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-amber-950 dark:text-amber-100">Situação</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-amber-950 dark:text-slate-200">Ativo</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-amber-950 dark:text-slate-200">Data</th>
+                    <th class="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-amber-950 dark:text-slate-200">Quantidade faltante</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-amber-950 dark:text-slate-200">Transação relacionada</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-amber-950 dark:text-slate-200">Situação</th>
                   </tr>
                 </thead>
                 <tbody class="divide-y divide-amber-100 dark:divide-slate-700">
@@ -141,7 +141,12 @@
                     <td class="px-4 py-3 text-sm text-gray-700 dark:text-slate-200">{{ formatDate(gap.occurred_at) }}</td>
                     <td class="px-4 py-3 text-right text-sm text-gray-700 dark:text-slate-200">{{ Number(gap.missing_quantity) > 0 ? formatQuantity(gap.missing_quantity) : '—' }}</td>
                     <td class="px-4 py-3 text-sm text-gray-700 dark:text-slate-200">#{{ gap.transaction?.id }} · {{ gap.transaction?.type || 'Saída' }}</td>
-                    <td class="px-4 py-3 text-sm font-semibold text-amber-950 dark:text-amber-200">{{ gapSituationLabel(gap) }}</td>
+                    <td
+                      class="px-4 py-3 text-sm font-semibold"
+                      :class="Number(gap.missing_quantity) > 0
+                        ? 'text-rose-700 dark:text-rose-300'
+                        : 'text-amber-800 dark:text-amber-200'"
+                    >{{ gapSituationLabel(gap) }}</td>
                   </tr>
                 </tbody>
               </table>
