@@ -735,6 +735,7 @@ private function handleBinanceImport(Request $request): \Illuminate\Http\JsonRes
         if ($transactionData === null) {
             continue;
         }
+        $transactionData = $this->withBinanceAnnualCsvRowIdentity($transactionData);
 
         $recognizedRows++;
 
@@ -757,21 +758,32 @@ private function handleBinanceImport(Request $request): \Illuminate\Http\JsonRes
         }
 
         if ($skipDuplicates) {
-            $existingTransaction = $this->findExistingTransaction($transactionData);
+            $existingTransaction = $this->findPotentialExistingTransaction($transactionData);
             if ($existingTransaction !== null) {
                 if ($isBinanceExchangeImport) {
-                    $evidence = app(TransactionImportEvidenceService::class)
-                        ->attachAnnualCsvEvidence($existingTransaction, $transactionData);
-                    if ($evidence?->wasRecentlyCreated) {
-                        $documentaryEvidenceAdded++;
+                    $evidence = null;
+                    if ($existingTransaction->import_origin === 'binance_api') {
+                        $evidence = app(TransactionImportEvidenceService::class)
+                            ->attachAnnualCsvEvidence($existingTransaction, $transactionData);
+                        if ($evidence?->wasRecentlyCreated) {
+                            $documentaryEvidenceAdded++;
+                        }
                     }
 
-                    if ($evidence !== null
-                        || $existingTransaction->import_origin === 'binance_annual_csv'
-                        || $existingTransaction->import_origin === 'legacy_unknown'
-                        || (! empty($transactionData['reference'])
-                            && $existingTransaction->reference === $transactionData['reference'])) {
+                    if ($evidence !== null) {
                         continue;
+                    }
+
+                    if ($this->isSameAnnualCsvRow($existingTransaction, $transactionData)) {
+                        continue;
+                    }
+
+                    if (data_get($transactionData, 'import_metadata.format') === 'binance_annual_csv') {
+                        $transactionData['reference'] = $this->annualCsvCollisionReference($transactionData);
+                        $existingCsv = $this->findPotentialExistingTransaction($transactionData);
+                        if ($existingCsv !== null && $this->isSameAnnualCsvRow($existingCsv, $transactionData)) {
+                            continue;
+                        }
                     }
                 } else {
                     continue;
@@ -1255,7 +1267,7 @@ private function parseNumeric($value): ?float
     return is_numeric($normalized) ? (float)$normalized : null;
 }
 
-private function findExistingTransaction(array $transactionData): ?Transaction
+private function findPotentialExistingTransaction(array $transactionData): ?Transaction
 {
     // ── Estratégia 1: deduplicação cross-source por reference ──────────────────
     //
@@ -1295,6 +1307,83 @@ private function findExistingTransaction(array $transactionData): ?Transaction
     }
 
     return $query->first();
+}
+
+private function withBinanceAnnualCsvRowIdentity(array $transactionData): array
+{
+    if (data_get($transactionData, 'import_metadata.format') !== 'binance_annual_csv') {
+        return $transactionData;
+    }
+
+    $identity = [
+        'user_id' => (int) $transactionData['user_id'],
+        'import_origin' => 'binance_annual_csv',
+        'source_reference' => $transactionData['reference'] ?? null,
+        'type' => $transactionData['type'] ?? null,
+        'operation' => $transactionData['operation'] ?? null,
+        'from_asset' => strtoupper((string) ($transactionData['from_asset'] ?? '')),
+        'from_amount' => $this->canonicalCsvDecimal($transactionData['from_amount'] ?? null),
+        'to_asset' => strtoupper((string) ($transactionData['to_asset'] ?? '')),
+        'to_amount' => $this->canonicalCsvDecimal($transactionData['to_amount'] ?? null),
+        'date_utc' => Carbon::parse($transactionData['date'])->utc()->toIso8601String(),
+    ];
+
+    $transactionData['import_metadata']['source_reference'] = $transactionData['reference'] ?? null;
+    $transactionData['import_metadata']['csv_row_fingerprint'] = hash(
+        'sha256',
+        json_encode($identity, JSON_THROW_ON_ERROR),
+    );
+
+    return $transactionData;
+}
+
+private function isSameAnnualCsvRow(Transaction $transaction, array $transactionData): bool
+{
+    $fingerprint = data_get($transactionData, 'import_metadata.csv_row_fingerprint');
+
+    return $transaction->import_origin === 'binance_annual_csv'
+        && is_string($fingerprint)
+        && hash_equals(
+            (string) data_get($transaction->import_metadata, 'csv_row_fingerprint'),
+            $fingerprint,
+        );
+}
+
+private function annualCsvCollisionReference(array $transactionData): string
+{
+    return 'binance-annual-csv:'.data_get($transactionData, 'import_metadata.csv_row_fingerprint');
+}
+
+private function canonicalCsvDecimal(mixed $value): ?string
+{
+    $value = trim((string) $value);
+    if (preg_match('/^([+-]?)(\d+)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$/', $value, $matches) !== 1) {
+        return null;
+    }
+
+    $negative = $matches[1] === '-';
+    $integer = $matches[2];
+    $fraction = $matches[3] ?? '';
+    $exponent = isset($matches[4]) ? (int) $matches[4] : 0;
+    $digits = $integer.$fraction;
+    $decimalPosition = strlen($integer) + $exponent;
+
+    if ($decimalPosition <= 0) {
+        $integer = '0';
+        $fraction = str_repeat('0', -$decimalPosition).$digits;
+    } elseif ($decimalPosition >= strlen($digits)) {
+        $integer = $digits.str_repeat('0', $decimalPosition - strlen($digits));
+        $fraction = '';
+    } else {
+        $integer = substr($digits, 0, $decimalPosition);
+        $fraction = substr($digits, $decimalPosition);
+    }
+
+    $integer = ltrim($integer, '0') ?: '0';
+    $fraction = rtrim($fraction, '0');
+    $normalized = $integer.($fraction !== '' ? '.'.$fraction : '');
+
+    return $negative && $normalized !== '0' ? '-'.$normalized : $normalized;
 }
 
 private function extractRowsFromImportedFile(string $filePath, string $extension): array

@@ -97,6 +97,16 @@ class BinanceApiCsvReconciliationTest extends TestCase
             'coverage_month' => 1,
         ])->assertRedirect(route('transactions.index'));
 
+        $this->actingAs($this->user)->post(route('transactions.import.csv'), [
+            'file' => UploadedFile::fake()->createWithContent('2025.csv', $csv),
+            'format' => 'binance',
+            'skip_duplicates' => true,
+            'source_type' => 'exchange',
+            'source_id' => $this->apiKey->id,
+            'coverage_year' => 2025,
+            'coverage_month' => 1,
+        ])->assertRedirect(route('transactions.index'));
+
         $this->assertDatabaseCount('transactions', 2);
         $reconciliation = TransactionReconciliation::query()->sole();
         $this->assertSame(TransactionReconciliation::STATUS_PENDING_REVIEW, $reconciliation->status);
@@ -149,6 +159,133 @@ class BinanceApiCsvReconciliationTest extends TestCase
         $this->assertSame(FifoInventoryGap::COST_KNOWN, $api->fresh()->to_cost_status);
         $this->assertSame(2513.2905916201, (float) $sale->fresh()->cost_basis_brl);
         $this->assertDatabaseCount('fifo_inventory_gaps', 0);
+    }
+
+    public function test_same_reference_with_divergent_economic_event_preserves_csv_idempotently(): void
+    {
+        $api = $this->apiConvert('shared-divergent', [
+            'type' => 'sell',
+            'from_asset' => 'BTC',
+            'from_amount' => '1',
+        ]);
+        $before = $this->rawFields($api);
+        $line = 'shared-divergent,2025-01-02 08:48:38,Trade,,CONVERT,,400,USDT,2518.58,,122216.76,1MBABYDOGE,2513.2905916201,,0,,0';
+
+        $this->importAnnualCsvLine($line);
+        $this->importAnnualCsvLine($line);
+
+        $this->assertDatabaseCount('transactions', 2);
+        $this->assertDatabaseCount('transaction_import_evidences', 0);
+        $this->assertDatabaseCount('transaction_reconciliations', 0);
+        $this->assertSame($before, $this->rawFields($api->fresh()));
+        $this->assertDatabaseHas('transactions', ['import_origin' => 'binance_annual_csv']);
+    }
+
+    public function test_same_reference_with_real_timestamp_difference_preserves_csv_idempotently(): void
+    {
+        $this->apiConvert('shared-time', ['date' => '2025-01-02 12:00:00']);
+        $line = 'shared-time,2025-01-02 08:48:38,Trade,,CONVERT,,400,USDT,2518.58,,122216.76,1MBABYDOGE,2513.2905916201,,0,,0';
+
+        $this->importAnnualCsvLine($line);
+        $this->importAnnualCsvLine($line);
+
+        $this->assertDatabaseCount('transactions', 2);
+        $this->assertDatabaseCount('transaction_import_evidences', 0);
+        $this->assertDatabaseCount('transaction_reconciliations', 0);
+    }
+
+    public function test_same_reference_with_legacy_unknown_preserves_both_rows_idempotently(): void
+    {
+        $this->mock(\App\Services\TransactionImportEvidenceService::class)
+            ->shouldNotReceive('attachAnnualCsvEvidence');
+        $legacy = $this->transaction(
+            'convert',
+            'USDT',
+            '400',
+            '1MBABYDOGE',
+            '122216.76',
+            '2025-01-02 08:48:38',
+            null,
+            ['reference' => 'shared-legacy', 'import_origin' => 'legacy_unknown'],
+        );
+        $before = $this->rawFields($legacy);
+        $line = 'shared-legacy,2025-01-02 08:48:38,Trade,,CONVERT,,400,USDT,2518.58,,122216.76,1MBABYDOGE,2513.2905916201,,0,,0';
+
+        $this->importAnnualCsvLine($line);
+        $this->importAnnualCsvLine($line);
+
+        $this->assertDatabaseCount('transactions', 2);
+        $this->assertDatabaseCount('transaction_import_evidences', 0);
+        $this->assertDatabaseCount('transaction_reconciliations', 0);
+        $this->assertSame($before, $this->rawFields($legacy->fresh()));
+        $this->assertDatabaseHas('transactions', ['import_origin' => 'binance_annual_csv']);
+    }
+
+    public function test_same_reference_with_manual_transaction_preserves_both_rows_idempotently(): void
+    {
+        $this->mock(\App\Services\TransactionImportEvidenceService::class)
+            ->shouldNotReceive('attachAnnualCsvEvidence');
+        $manual = $this->transaction(
+            'convert',
+            'USDT',
+            '400',
+            '1MBABYDOGE',
+            '122216.76',
+            '2025-01-02 08:48:38',
+            null,
+            ['reference' => 'shared-manual', 'import_origin' => 'manual'],
+        );
+        $before = $this->rawFields($manual);
+        $line = 'shared-manual,2025-01-02 08:48:38,Trade,,CONVERT,,400,USDT,2518.58,,122216.76,1MBABYDOGE,2513.2905916201,,0,,0';
+
+        $this->importAnnualCsvLine($line);
+        $this->importAnnualCsvLine($line);
+
+        $this->assertDatabaseCount('transactions', 2);
+        $this->assertDatabaseCount('transaction_import_evidences', 0);
+        $this->assertDatabaseCount('transaction_reconciliations', 0);
+        $this->assertSame($before, $this->rawFields($manual->fresh()));
+        $this->assertDatabaseHas('transactions', ['import_origin' => 'binance_annual_csv']);
+    }
+
+    public function test_technical_csv_reference_is_user_scoped_and_decimal_canonical(): void
+    {
+        $controller = app(\App\Http\Controllers\TransactionController::class);
+        $identityMethod = new ReflectionMethod($controller, 'withBinanceAnnualCsvRowIdentity');
+        $identityMethod->setAccessible(true);
+        $referenceMethod = new ReflectionMethod($controller, 'annualCsvCollisionReference');
+        $referenceMethod->setAccessible(true);
+        $base = [
+            'user_id' => $this->user->id,
+            'import_origin' => 'binance_annual_csv',
+            'reference' => 'same-binance-reference',
+            'type' => 'convert',
+            'operation' => 'convert',
+            'from_asset' => 'usdt',
+            'from_amount' => '400',
+            'to_asset' => 'btc',
+            'to_amount' => '0.01',
+            'date' => Carbon::parse('2025-01-02 08:48:38', 'America/Sao_Paulo'),
+            'import_metadata' => ['format' => 'binance_annual_csv', 'existing_key' => 'preserved'],
+        ];
+
+        $reference = fn (array $data): string => $referenceMethod->invoke(
+            $controller,
+            $identityMethod->invoke($controller, $data),
+        );
+
+        $this->assertSame($reference($base), $reference([...$base, 'from_amount' => '400.0']));
+        $this->assertSame($reference($base), $reference([...$base, 'from_amount' => '400.0000000000']));
+        $this->assertNotSame(
+            $reference([...$base, 'from_amount' => '9007199254740992.0000000001']),
+            $reference([...$base, 'from_amount' => '9007199254740992.0000000002']),
+        );
+
+        $otherUser = User::factory()->create(['email_verified_at' => now()]);
+        $this->assertNotSame($reference($base), $reference([...$base, 'user_id' => $otherUser->id]));
+        $identified = $identityMethod->invoke($controller, $base);
+        $this->assertSame('preserved', data_get($identified, 'import_metadata.existing_key'));
+        $this->assertSame('same-binance-reference', data_get($identified, 'import_metadata.source_reference'));
     }
 
     public function test_legacy_unknown_never_receives_csv_evidence_automatically(): void
@@ -517,6 +654,25 @@ class BinanceApiCsvReconciliationTest extends TestCase
             'to_cost_evidence_type' => 'historical_market_quote',
             ...$attributes,
         ]);
+    }
+
+    private function importAnnualCsvLine(string $line): void
+    {
+        $this->withoutMiddleware(\App\Http\Middleware\VerifyCsrfToken::class);
+        $csv = implode("\n", [
+            'id,datetime_tz_GMT-03:00,type,label,market_model_type,order_type,sent_amount,sent_currency,sent_value_BRL,sent_address,received_amount,received_currency,received_value_BRL,received_address,fee_amount,fee_currency,fee_value_BRL',
+            $line,
+        ]);
+
+        $this->actingAs($this->user)->post(route('transactions.import.csv'), [
+            'file' => UploadedFile::fake()->createWithContent('2025.csv', $csv),
+            'format' => 'binance',
+            'skip_duplicates' => true,
+            'source_type' => 'exchange',
+            'source_id' => $this->apiKey->id,
+            'coverage_year' => 2025,
+            'coverage_month' => 1,
+        ])->assertRedirect(route('transactions.index'));
     }
 
     private function csvConvert(string $reference, array $attributes = []): Transaction
