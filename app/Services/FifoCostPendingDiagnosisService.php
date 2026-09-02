@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\FifoInventoryGap;
 use App\Models\Transaction;
+use App\Models\TransactionReconciliation;
 use App\Models\User;
 use App\Support\DecimalMath;
 use Carbon\CarbonImmutable;
@@ -115,9 +116,13 @@ class FifoCostPendingDiagnosisService
             }
 
             $date = CarbonImmutable::parse($lot['lot_date'])->utc();
-            $source = Transaction::query()
+            $sources = Transaction::query()
                 ->where('user_id', $gap->user_id)
                 ->where('id', '!=', $gap->transaction_id)
+                ->whereNotIn('id', TransactionReconciliation::query()
+                    ->select('matched_transaction_id')
+                    ->where('user_id', $gap->user_id)
+                    ->where('status', TransactionReconciliation::STATUS_CONFIRMED))
                 ->where('date', $date)
                 ->where(function ($query) use ($gap): void {
                     $query->where('to_asset', strtoupper($gap->asset))
@@ -126,7 +131,10 @@ class FifoCostPendingDiagnosisService
                         });
                 })
                 ->orderBy('id')
-                ->first();
+                ->get();
+            $source = $sources->first(
+                fn (Transaction $candidate): bool => data_get($candidate->import_metadata, 'format') === 'binance_annual_csv',
+            ) ?? $sources->first();
 
             if ($source !== null) {
                 return $source;

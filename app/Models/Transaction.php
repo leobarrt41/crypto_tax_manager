@@ -4,6 +4,8 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class Transaction extends Model
 {
@@ -120,6 +122,15 @@ class Transaction extends Model
         return $this->hasOne(FifoInventoryGap::class);
     }
 
+    public function canonicalReconciliations(): HasMany
+    {
+        return $this->hasMany(TransactionReconciliation::class, 'canonical_transaction_id');
+    }
+
+    public function duplicateReconciliation(): HasOne
+    {
+        return $this->hasOne(TransactionReconciliation::class, 'matched_transaction_id');
+    }
 
     /**
      * Taxa da operação expressa no ativo enviado por uma unidade do ativo recebido.
@@ -142,20 +153,17 @@ class Transaction extends Model
     }
 
     public function getPriceInBRLAttribute()
-{
-    $price = $this->cryptoAsset->prices()
-        ->whereDate('retrieved_at', '<=', $this->date)
-        ->orderByDesc('retrieved_at')
-        ->first();
+    {
+        $price = $this->cryptoAsset->prices()
+            ->whereDate('retrieved_at', '<=', $this->date)
+            ->orderByDesc('retrieved_at')
+            ->first();
 
-    return $price ? $price->price_in_brl : null;
+        return $price ? $price->price_in_brl : null;
+    }
+
+    public function getTotalInBRLAttribute()
+    {
+        return $this->price_in_brl ? $this->price_in_brl * $this->amount : null;
+    }
 }
-
-public function getTotalInBRLAttribute()
-{
-    return $this->price_in_brl ? $this->price_in_brl * $this->amount : null;
-}
-
-
-}
-
