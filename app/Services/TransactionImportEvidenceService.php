@@ -95,8 +95,28 @@ class TransactionImportEvidenceService
 
     private function sameDecimal(mixed $left, mixed $right): bool
     {
-        return is_numeric($left)
-            && is_numeric($right)
-            && $this->decimal->compare((string) $left, (string) $right) === 0;
+        $leftDecimal = $this->comparableDecimal($left);
+        $rightDecimal = $this->comparableDecimal($right);
+
+        return $leftDecimal !== null
+            && $rightDecimal !== null
+            && $this->decimal->compare($leftDecimal, $rightDecimal) === 0;
+    }
+
+    private function comparableDecimal(mixed $value): ?string
+    {
+        if (! is_numeric($value)) {
+            return null;
+        }
+
+        $value = trim((string) $value);
+        if (str_contains(strtolower($value), 'e')) {
+            // transactions.from_amount/to_amount usam escala 10. A expansão
+            // replica a representação persistida, sem usar o float em cálculo
+            // monetário ou criar precisão que a coluna não possui.
+            $value = number_format((float) $value, 10, '.', '');
+        }
+
+        return $value;
     }
 }

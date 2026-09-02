@@ -126,6 +126,33 @@ class BinanceApiCsvReconciliationTest extends TestCase
         $this->assertDatabaseCount('fifo_inventory_gaps', 0);
     }
 
+    public function test_legacy_evidence_accepts_csv_quantities_expressed_in_scientific_notation(): void
+    {
+        $legacy = $this->transaction('convert', 'USDT', '0.0000000100', 'SHIB', '1000', '2025-01-02 08:48:38', null, [
+            'reference' => 'scientific-reference',
+        ]);
+        $mapped = [
+            'user_id' => $this->user->id,
+            'type' => 'convert',
+            'from_asset' => 'USDT',
+            'from_amount' => 1.0E-8,
+            'to_asset' => 'SHIB',
+            'to_amount' => 1000.0,
+            'date' => $legacy->date,
+            'reference' => 'scientific-reference',
+            'import_metadata' => [
+                'format' => 'binance_annual_csv',
+                'brl_values' => ['received_value_brl' => '0.01'],
+            ],
+        ];
+
+        $evidence = app(\App\Services\TransactionImportEvidenceService::class)
+            ->attachAnnualCsvEvidence($legacy, $mapped);
+
+        $this->assertNotNull($evidence);
+        $this->assertDatabaseCount('transaction_import_evidences', 1);
+    }
+
     public function test_automatic_api_import_reconciles_when_csv_was_imported_first(): void
     {
         $csv = $this->csvConvert('csv-first');
