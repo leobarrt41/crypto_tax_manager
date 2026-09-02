@@ -208,6 +208,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::get('/relatorio-ir/summary', [TaxReportController::class, 'monthlySummary'])->name('relatorio-ir.summary');
         Route::post('/relatorio-ir/recalculate', [TaxReportController::class, 'recalculateFifo'])->name('relatorio-ir.recalculate');
         Route::get('/relatorio-ir/acquisition-history', [TaxReportController::class, 'acquisitionHistory'])->name('relatorio-ir.acquisition-history');
+        Route::get('/relatorio-ir/cost-pending-diagnosis', [TaxReportController::class, 'costPendingDiagnosisPage'])->name('relatorio-ir.cost-pending-diagnosis');
+        Route::get('/relatorio-ir/cost-pending-diagnosis/data', [TaxReportController::class, 'costPendingDiagnosis'])->name('relatorio-ir.cost-pending-diagnosis.data');
         Route::get('/relatorio-ir/opening-balances', [TaxReportController::class, 'openingBalances'])->name('relatorio-ir.opening-balances.index');
         Route::post('/relatorio-ir/opening-balances', [TaxReportController::class, 'storeOpeningBalance'])->name('relatorio-ir.opening-balances.store');
         Route::delete('/relatorio-ir/opening-balances/{openingBalance}', [TaxReportController::class, 'destroyOpeningBalance'])->name('relatorio-ir.opening-balances.destroy');
