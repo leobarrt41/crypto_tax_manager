@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\FifoInventoryGap;
+use App\Models\FifoRecalculationRun;
 use App\Models\Transaction;
 use App\Models\User;
 use App\Services\FifoCalculatorService;
@@ -159,6 +160,107 @@ class FifoInventoryGapTest extends TestCase
         $this->assertNull($sale->fresh()->profit_loss_brl);
     }
 
+    public function test_convert_chain_does_not_propagate_pending_disposal_cost_to_received_assets(): void
+    {
+        $user = User::factory()->create(['email_verified_at' => now()]);
+        $this->transaction($user, 'asset_dividend', null, null, 'GAIX', 10, '2022-01-01 08:00:00', null, [
+            'cost_status' => FifoInventoryGap::COST_PENDING,
+            'quantity_status' => FifoInventoryGap::QUANTITY_COMPLETE,
+        ]);
+        $gaixToUsdt = $this->documentedConvert($user, 'GAIX', 10, 'USDT', 100, '2022-01-01 09:00:00', '500.1234567890');
+        $usdtToXrp = $this->documentedConvert($user, 'USDT', 100, 'XRP', 200, '2022-01-01 10:00:00', '510.1234567890');
+        $xrpToSol = $this->documentedConvert($user, 'XRP', 200, 'SOL', 2, '2022-01-01 11:00:00', '520.1234567890');
+        $sale = $this->transaction($user, 'sell', 'SOL', 2, 'BRL', 700, '2022-01-01 12:00:00', 700);
+
+        app(FifoCalculatorService::class)->recalculateForUser($user->id);
+
+        $this->assertSame(FifoInventoryGap::COST_PENDING, $gaixToUsdt->fresh()->from_cost_status);
+        $this->assertSame(FifoInventoryGap::COST_KNOWN, $gaixToUsdt->fresh()->to_cost_status);
+        $this->assertSame(FifoInventoryGap::COST_KNOWN, $usdtToXrp->fresh()->from_cost_status);
+        $this->assertSame(FifoInventoryGap::COST_KNOWN, $usdtToXrp->fresh()->to_cost_status);
+        $this->assertSame(FifoInventoryGap::COST_KNOWN, $xrpToSol->fresh()->from_cost_status);
+        $this->assertSame(FifoInventoryGap::COST_KNOWN, $xrpToSol->fresh()->to_cost_status);
+        $this->assertSame('520.1234567890', $sale->fresh()->cost_basis_brl);
+        $this->assertSame('complete', $sale->fresh()->fifo_status);
+        $this->assertDatabaseCount('fifo_inventory_gaps', 1);
+        $this->assertSame($gaixToUsdt->id, FifoInventoryGap::query()->sole()->transaction_id);
+    }
+
+    public function test_convert_without_acquisition_value_keeps_received_cost_null_and_pending(): void
+    {
+        $user = User::factory()->create(['email_verified_at' => now()]);
+        $this->transaction($user, 'buy', 'BRL', 100, 'DENT', 10, '2022-01-01 08:00:00', 100);
+        $convert = $this->transaction($user, 'convert', 'DENT', 10, 'XRP', 5, '2022-01-01 09:00:00', null);
+        $sale = $this->transaction($user, 'sell', 'XRP', 5, 'BRL', 200, '2022-01-01 10:00:00', 200);
+
+        app(FifoCalculatorService::class)->recalculateForUser($user->id);
+
+        $this->assertSame(FifoInventoryGap::COST_KNOWN, $convert->fresh()->from_cost_status);
+        $this->assertSame(FifoInventoryGap::QUANTITY_COMPLETE, $convert->fresh()->to_quantity_status);
+        $this->assertSame(FifoInventoryGap::COST_PENDING, $convert->fresh()->to_cost_status);
+        $this->assertNull($convert->fresh()->to_cost_basis_brl);
+        $this->assertNull($sale->fresh()->cost_basis_brl);
+        $this->assertSame('pending_acquisition_cost', FifoInventoryGap::query()->sole()->reason);
+    }
+
+    public function test_convert_with_known_disposal_and_documented_acquisition_keeps_both_legs_known(): void
+    {
+        $user = User::factory()->create(['email_verified_at' => now()]);
+        $this->transaction($user, 'buy', 'BRL', 100, 'BTC', 1, '2022-01-01 08:00:00', 100);
+        $convert = $this->documentedConvert($user, 'BTC', 1, 'ETH', 10, '2022-01-01 09:00:00', '120.0000000000');
+
+        app(FifoCalculatorService::class)->recalculateForUser($user->id);
+
+        $this->assertSame(FifoInventoryGap::COST_KNOWN, $convert->fresh()->from_cost_status);
+        $this->assertSame(FifoInventoryGap::COST_KNOWN, $convert->fresh()->to_cost_status);
+        $this->assertSame('120.0000000000', $convert->fresh()->to_cost_basis_brl);
+        $this->assertDatabaseCount('fifo_inventory_gaps', 0);
+    }
+
+    public function test_convert_without_received_quantity_creates_received_leg_gap_and_no_fictitious_lot(): void
+    {
+        $user = User::factory()->create(['email_verified_at' => now()]);
+        $this->transaction($user, 'buy', 'BRL', 100, 'BTC', 1, '2022-01-01 08:00:00', 100);
+        $convert = $this->documentedConvert($user, 'BTC', 1, 'ETH', null, '2022-01-01 09:00:00', '120.0000000000');
+        $sale = $this->transaction($user, 'sell', 'ETH', 1, 'BRL', 200, '2022-01-01 10:00:00', 200);
+
+        app(FifoCalculatorService::class)->recalculateForUser($user->id);
+
+        $this->assertSame(FifoInventoryGap::QUANTITY_INCOMPLETE, $convert->fresh()->to_quantity_status);
+        $this->assertSame(FifoInventoryGap::COST_PENDING, $convert->fresh()->to_cost_status);
+        $this->assertNull($convert->fresh()->to_cost_basis_brl);
+        $this->assertSame('missing_received_quantity', $convert->fifoInventoryGap()->sole()->reason);
+        $this->assertSame('incomplete', $sale->fresh()->fifo_status);
+        $this->assertSame('1.000000000000', $sale->fifoInventoryGap()->sole()->missing_quantity);
+    }
+
+    public function test_recalculation_is_idempotent_audited_and_preserves_imported_convert_fields(): void
+    {
+        $user = User::factory()->create(['email_verified_at' => now()]);
+        $this->transaction($user, 'asset_dividend', null, null, 'GAIX', 1, '2022-01-01 08:00:00', null, [
+            'cost_status' => FifoInventoryGap::COST_PENDING,
+            'quantity_status' => FifoInventoryGap::QUANTITY_COMPLETE,
+        ]);
+        $convert = $this->documentedConvert($user, 'GAIX', 1, 'USDT', 50, '2022-01-01 09:00:00', '250.1234567890');
+        $raw = $convert->only(['from_asset', 'from_amount', 'to_asset', 'to_amount', 'total_brl', 'import_metadata']);
+        $fifo = app(FifoCalculatorService::class);
+
+        $first = $fifo->recalculateForUser($user->id);
+        $firstDerived = $convert->fresh()->only(['from_cost_status', 'to_cost_status', 'to_cost_basis_brl', 'fifo_lots']);
+        $second = $fifo->recalculateForUser($user->id);
+
+        $this->assertSame($first, $second);
+        $this->assertSame($firstDerived, $convert->fresh()->only(array_keys($firstDerived)));
+        $this->assertSame($raw, $convert->fresh()->only(array_keys($raw)));
+        $this->assertDatabaseCount('fifo_inventory_gaps', 1);
+        $this->assertDatabaseCount('fifo_recalculation_runs', 2);
+        $this->assertSame(
+            [FifoCalculatorService::ALGORITHM_VERSION],
+            FifoRecalculationRun::query()->distinct()->pluck('algorithm_version')->all(),
+        );
+        $this->assertSame(['completed', 'completed'], FifoRecalculationRun::query()->pluck('status')->all());
+    }
+
     public function test_credit_after_sale_does_not_resolve_the_prior_fifo_gap(): void
     {
         $user = User::factory()->create(['email_verified_at' => now()]);
@@ -292,11 +394,11 @@ class FifoInventoryGapTest extends TestCase
         User $user,
         string $type,
         ?string $fromAsset,
-        ?float $fromAmount,
+        float|string|null $fromAmount,
         ?string $toAsset,
-        ?float $toAmount,
+        float|string|null $toAmount,
         string $date,
-        ?float $totalBrl,
+        float|string|null $totalBrl,
         array $attributes = [],
     ): Transaction {
         return Transaction::query()->create(array_merge([
@@ -312,5 +414,24 @@ class FifoInventoryGapTest extends TestCase
             'total_brl' => $totalBrl,
             'date' => $date,
         ], $attributes));
+    }
+
+    private function documentedConvert(
+        User $user,
+        string $fromAsset,
+        float|string|null $fromAmount,
+        string $toAsset,
+        float|string|null $toAmount,
+        string $date,
+        string $receivedValueBrl,
+    ): Transaction {
+        return $this->transaction($user, 'convert', $fromAsset, $fromAmount, $toAsset, $toAmount, $date, $receivedValueBrl, [
+            'import_metadata' => [
+                'brl_values' => [
+                    'received_value_brl' => $receivedValueBrl,
+                    'selected_source' => 'received_value_brl',
+                ],
+            ],
+        ]);
     }
 }

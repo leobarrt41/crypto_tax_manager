@@ -67,6 +67,8 @@ class Transaction extends Model
         'quote_qty' => 'decimal:12',
         'commission' => 'decimal:12',
         'commission_value_brl' => 'decimal:10',
+        'cost_basis_brl' => 'decimal:10',
+        'profit_loss_brl' => 'decimal:10',
         'to_cost_basis_brl' => 'decimal:10',
         'import_metadata' => 'array',
         'executed_at' => 'datetime',
@@ -120,7 +122,6 @@ class Transaction extends Model
         return $this->hasOne(FifoInventoryGap::class);
     }
 
-
     /**
      * Taxa da operação expressa no ativo enviado por uma unidade do ativo recebido.
      * Não representa, por si só, um preço em USD ou BRL.
@@ -142,20 +143,17 @@ class Transaction extends Model
     }
 
     public function getPriceInBRLAttribute()
-{
-    $price = $this->cryptoAsset->prices()
-        ->whereDate('retrieved_at', '<=', $this->date)
-        ->orderByDesc('retrieved_at')
-        ->first();
+    {
+        $price = $this->cryptoAsset->prices()
+            ->whereDate('retrieved_at', '<=', $this->date)
+            ->orderByDesc('retrieved_at')
+            ->first();
 
-    return $price ? $price->price_in_brl : null;
+        return $price ? $price->price_in_brl : null;
+    }
+
+    public function getTotalInBRLAttribute()
+    {
+        return $this->price_in_brl ? $this->price_in_brl * $this->amount : null;
+    }
 }
-
-public function getTotalInBRLAttribute()
-{
-    return $this->price_in_brl ? $this->price_in_brl * $this->amount : null;
-}
-
-
-}
-
