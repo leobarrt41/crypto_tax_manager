@@ -8,6 +8,7 @@ use App\Models\FifoInventoryGap;
 use App\Models\Transaction;
 use App\Services\FifoCalculatorService;
 use App\Services\FifoAcquisitionHistoryService;
+use App\Services\FifoCostPendingDiagnosisService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Inertia\Inertia;
@@ -17,6 +18,7 @@ class TaxReportController extends Controller
     public function __construct(
         private FifoCalculatorService $fifo,
         private FifoAcquisitionHistoryService $acquisitionHistory,
+        private FifoCostPendingDiagnosisService $costPendingDiagnosis,
     ) {
     }
 
@@ -165,6 +167,39 @@ class TaxReportController extends Controller
         return response()->json($this->acquisitionHistory->forYear(
             Auth::user(),
             (int) $data['year'],
+        ));
+    }
+
+    public function costPendingDiagnosisPage()
+    {
+        $years = FifoInventoryGap::query()
+            ->where('user_id', Auth::id())
+            ->orderByDesc('occurred_at')
+            ->get(['occurred_at'])
+            ->map(fn (FifoInventoryGap $gap): int => (int) $gap->occurred_at->format('Y'))
+            ->unique()
+            ->values()
+            ->all();
+
+        return Inertia::render('Reports/FifoCostPendingDiagnosis', [
+            'availableYears' => $years,
+            'classifierVersion' => FifoCostPendingDiagnosisService::CLASSIFIER_VERSION,
+        ]);
+    }
+
+    public function costPendingDiagnosis(Request $request)
+    {
+        $data = $request->validate([
+            'year' => 'required|integer|min:2009|max:2099',
+            'asset' => ['nullable', 'string', 'max:32', 'regex:/^[A-Za-z0-9._-]+$/'],
+            'category' => 'nullable|string|max:80',
+            'status' => 'nullable|in:open,resolved',
+        ]);
+
+        return response()->json($this->costPendingDiagnosis->forUser(
+            Auth::user(),
+            (int) $data['year'],
+            $data,
         ));
     }
 

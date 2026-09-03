@@ -8,7 +8,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 use Inertia\Inertia;
-use App\Jobs\ProcessBinanceImport; 
+use App\Jobs\ProcessBinanceImport;
 use App\Models\Transaction;
 use App\Models\UserApiKey;
 use App\Models\CryptoAsset;
@@ -17,6 +17,9 @@ use App\Services\FifoCalculatorService;
 use App\Services\BinanceImportService; // ✅ Importa o novo serviço
 use App\Services\CryptoPriceService;
 use App\Services\TransactionImportCoverageService;
+use App\Services\TransactionImportEvidenceService;
+use App\Services\BinanceApiCsvReconciliationService;
+use App\Support\DecimalMath;
 use Exception;
 use Carbon\Carbon; // Necessário para a reconstrução de saldos
 use OpenSpout\Reader\XLSX\Reader as XlsxReader;
@@ -204,6 +207,7 @@ public function index(Request $request)
         ]);
 
         $data['user_id'] = auth()->id();
+        $data['import_origin'] = 'manual';
 
         try {
             $transaction = Transaction::create($data);
@@ -219,7 +223,7 @@ public function index(Request $request)
                 ->with('success', 'Transação cadastrada com sucesso!');
         } catch (Exception $e) {
             Log::error('Erro ao criar transação manual: ' . $e->getMessage());
-            
+
             return back()->withErrors(['error' => 'Erro ao cadastrar transação.'])
                 ->withInput();
         }
@@ -290,12 +294,12 @@ public function index(Request $request)
                 $transaction->user_id,
                 (int) Carbon::parse($transaction->date)->year,
             );
-            
+
             return redirect()->route('transactions.index')
                 ->with('success', 'Transação atualizada com sucesso!');
         } catch (Exception $e) {
             Log::error('Erro ao atualizar transação: ' . $e->getMessage());
-            
+
             return back()->withErrors(['error' => 'Erro ao atualizar transação.'])
                 ->withInput();
         }
@@ -311,13 +315,13 @@ public function index(Request $request)
 
         try {
             $transaction->delete();
-            
+
             // Redireciona para a página anterior de onde a requisição veio.
             return redirect()->back()->with('success', 'Transação removida com sucesso!');
 
         } catch (Exception $e) {
             Log::error('Erro ao remover transação: ' . $e->getMessage());
-            
+
             return redirect()->back()->withErrors(['error' => 'Erro ao remover transação.']);
         }
     }
@@ -372,7 +376,7 @@ public function destroyAll()
         Log::error('[Exclusão em Massa] Ocorreu uma exceção: ' . $e->getMessage(), [
             'trace' => $e->getTraceAsString()
         ]);
-        
+
         return redirect()->back()->withErrors(['error' => 'Ocorreu um erro ao tentar remover todas as transações.']);
     }
 }
@@ -654,7 +658,7 @@ private function handleBinanceImport(Request $request): \Illuminate\Http\JsonRes
 
         $importService = new BinanceImportService(auth()->user());
         $result = $importService->runSmartImport();
-        
+
         return response()->json($result);
 
     } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
@@ -669,7 +673,7 @@ private function handleBinanceImport(Request $request): \Illuminate\Http\JsonRes
     }
 }
 
-    
+
     public function importCsv(Request $request)
 {
     $validated = $request->validate([
@@ -712,6 +716,7 @@ private function handleBinanceImport(Request $request): \Illuminate\Http\JsonRes
     [$headers, $rows] = $this->extractRowsFromImportedFile($uploadedFile->getRealPath(), $extension);
 
     $imported = 0;
+    $documentaryEvidenceAdded = 0;
     $recognizedRows = 0;
 
     $skipDuplicates = (bool) ($validated['skip_duplicates'] ?? true);
@@ -731,6 +736,7 @@ private function handleBinanceImport(Request $request): \Illuminate\Http\JsonRes
         if ($transactionData === null) {
             continue;
         }
+        $transactionData = $this->withBinanceAnnualCsvRowIdentity($transactionData);
 
         $recognizedRows++;
 
@@ -752,11 +758,44 @@ private function handleBinanceImport(Request $request): \Illuminate\Http\JsonRes
             }
         }
 
-        if ($skipDuplicates && $this->transactionAlreadyExists($transactionData)) {
-            continue;
+        if ($skipDuplicates) {
+            $existingTransaction = $this->findPotentialExistingTransaction($transactionData);
+            if ($existingTransaction !== null) {
+                if ($isBinanceExchangeImport) {
+                    $evidence = null;
+                    if ($existingTransaction->import_origin === 'binance_api') {
+                        $evidence = app(TransactionImportEvidenceService::class)
+                            ->attachAnnualCsvEvidence($existingTransaction, $transactionData);
+                        if ($evidence?->wasRecentlyCreated) {
+                            $documentaryEvidenceAdded++;
+                        }
+                    }
+
+                    if ($evidence !== null) {
+                        continue;
+                    }
+
+                    if ($this->isSameAnnualCsvRow($existingTransaction, $transactionData)) {
+                        continue;
+                    }
+
+                    if (data_get($transactionData, 'import_metadata.format') === 'binance_annual_csv') {
+                        $transactionData['reference'] = $this->annualCsvCollisionReference($transactionData);
+                        $existingCsv = $this->findPotentialExistingTransaction($transactionData);
+                        if ($existingCsv !== null && $this->isSameAnnualCsvRow($existingCsv, $transactionData)) {
+                            continue;
+                        }
+                    }
+                } else {
+                    continue;
+                }
+            }
         }
 
-        Transaction::create($transactionData);
+        $transaction = Transaction::create($transactionData);
+        if ($isBinanceExchangeImport) {
+            app(BinanceApiCsvReconciliationService::class)->reconcileTransaction($transaction);
+        }
         $imported++;
     }
 
@@ -790,6 +829,9 @@ private function handleBinanceImport(Request $request): \Illuminate\Http\JsonRes
     }
 
     $message = "{$imported} transações importadas com sucesso.";
+    if ($documentaryEvidenceAdded > 0) {
+        $message .= " {$documentaryEvidenceAdded} transações existentes receberam evidência documental do CSV.";
+    }
     if ($isBinanceExchangeImport && count($coveredMonths) > 1) {
         $message .= ' A cobertura foi confirmada para ' . count($coveredMonths) . ' meses identificados no arquivo.';
     }
@@ -818,6 +860,7 @@ private function mapImportedRowToTransactionData(array $data, string $format, st
         'user_id' => auth()->id(),
         'source_type' => $sourceModel,
         'source_id' => $sourceId,
+        'import_origin' => 'legacy_unknown',
         'from_asset' => $data['from_asset'] ?? null,
         'to_asset' => $data['to_asset'] ?? null,
         'from_amount' => $this->parseNumeric($data['from_amount'] ?? null),
@@ -911,6 +954,7 @@ private function mapBinanceRowToTransactionData(array $data, string $sourceModel
         'user_id' => auth()->id(),
         'source_type' => $sourceModel,
         'source_id' => $sourceId,
+        'import_origin' => 'legacy_unknown',
         'from_asset' => $isBuy ? $quoteAsset : $baseAsset,
         'to_asset' => $isBuy ? $baseAsset : $quoteAsset,
         'from_amount' => $isBuy ? $quoteTotal : $qty,
@@ -993,6 +1037,7 @@ private function mapBinanceAnnualCsvRow(array $row, string $sourceModel, int $so
         'user_id' => auth()->id(),
         'source_type' => $sourceModel,
         'source_id' => $sourceId,
+        'import_origin' => 'binance_annual_csv',
         'from_asset' => $fromAsset !== '' ? $fromAsset : null,
         'to_asset' => $toAsset !== '' ? $toAsset : null,
         'from_amount' => $fromAmount,
@@ -1223,7 +1268,7 @@ private function parseNumeric($value): ?float
     return is_numeric($normalized) ? (float)$normalized : null;
 }
 
-private function transactionAlreadyExists(array $transactionData): bool
+private function findPotentialExistingTransaction(array $transactionData): ?Transaction
 {
     // ── Estratégia 1: deduplicação cross-source por reference ──────────────────
     //
@@ -1237,7 +1282,7 @@ private function transactionAlreadyExists(array $transactionData): bool
         return Transaction::query()
             ->where('user_id', $transactionData['user_id'])
             ->where('reference', $transactionData['reference'])
-            ->exists();
+            ->first();
     }
 
     // ── Estratégia 2: deduplicação por conteúdo (sem reference) ────────────────
@@ -1262,7 +1307,57 @@ private function transactionAlreadyExists(array $transactionData): bool
         $query->where('to_amount', $transactionData['to_amount']);
     }
 
-    return $query->exists();
+    return $query->first();
+}
+
+private function withBinanceAnnualCsvRowIdentity(array $transactionData): array
+{
+    if (data_get($transactionData, 'import_metadata.format') !== 'binance_annual_csv') {
+        return $transactionData;
+    }
+
+    $identity = [
+        'user_id' => (int) $transactionData['user_id'],
+        'import_origin' => 'binance_annual_csv',
+        'source_reference' => $transactionData['reference'] ?? null,
+        'type' => $transactionData['type'] ?? null,
+        'operation' => $transactionData['operation'] ?? null,
+        'from_asset' => strtoupper((string) ($transactionData['from_asset'] ?? '')),
+        'from_amount' => $this->canonicalCsvDecimal($transactionData['from_amount'] ?? null),
+        'to_asset' => strtoupper((string) ($transactionData['to_asset'] ?? '')),
+        'to_amount' => $this->canonicalCsvDecimal($transactionData['to_amount'] ?? null),
+        'date_utc' => Carbon::parse($transactionData['date'])->utc()->toIso8601String(),
+    ];
+
+    $transactionData['import_metadata']['source_reference'] = $transactionData['reference'] ?? null;
+    $transactionData['import_metadata']['csv_row_fingerprint'] = hash(
+        'sha256',
+        json_encode($identity, JSON_THROW_ON_ERROR),
+    );
+
+    return $transactionData;
+}
+
+private function isSameAnnualCsvRow(Transaction $transaction, array $transactionData): bool
+{
+    $fingerprint = data_get($transactionData, 'import_metadata.csv_row_fingerprint');
+
+    return $transaction->import_origin === 'binance_annual_csv'
+        && is_string($fingerprint)
+        && hash_equals(
+            (string) data_get($transaction->import_metadata, 'csv_row_fingerprint'),
+            $fingerprint,
+        );
+}
+
+private function annualCsvCollisionReference(array $transactionData): string
+{
+    return 'binance-annual-csv:'.data_get($transactionData, 'import_metadata.csv_row_fingerprint');
+}
+
+private function canonicalCsvDecimal(mixed $value): ?string
+{
+    return app(DecimalMath::class)->canonical($value);
 }
 
 private function extractRowsFromImportedFile(string $filePath, string $extension): array

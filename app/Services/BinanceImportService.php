@@ -358,6 +358,7 @@ public function runSmartImport(?int $year = null): array
             [
                 'source_type' => UserApiKey::class,
                 'source_id' => $this->apiKey->id,
+                'import_origin' => 'binance_api',
                 'type' => 'deposit',
                 'operation' => 'entrada',
                 'to_asset' => $asset,
@@ -394,6 +395,7 @@ public function runSmartImport(?int $year = null): array
             [
                 'source_type' => UserApiKey::class,
                 'source_id' => $this->apiKey->id,
+                'import_origin' => 'binance_api',
                 'type' => 'withdrawal',
                 'operation' => 'saida',
                 'from_asset' => $asset,
@@ -538,7 +540,7 @@ public function runSmartImport(?int $year = null): array
         $this->generateSnapshotsFromCryptoAssets();
     }
 
-   
+
 private function generateSnapshotsFromCryptoAssets(): void
 {
     Log::info("======================================================================");
@@ -555,11 +557,11 @@ private function generateSnapshotsFromCryptoAssets(): void
     Log::info("======================================================================");
 
     $monthlyAssets = [];
-    
+
     // Descobrir ativos via catálogo de pares prioritários
     $assetsFromPairs = $this->discoverAssetsFromTradingPairs();
     Log::info("✅ Ativos encontrados via Catálogo de Pares: " . count($assetsFromPairs));
-    
+
     // Descobrir ativos via conversões
     $assetsFromConversions = $this->discoverConversionsByInterval($monthlyAssets);
     Log::info("✅ Ativos encontrados via Conversões: " . count($assetsFromConversions));
@@ -575,7 +577,7 @@ private function generateSnapshotsFromCryptoAssets(): void
         $assetsFromAccount
     )));
     Log::info("📊 Total de ativos únicos para investigar: " . count($masterAssetList));
-    
+
     if (empty($masterAssetList)) {
         Log::warning("⚠️ Nenhum ativo encontrado para processar.");
         return;
@@ -597,12 +599,12 @@ private function generateSnapshotsFromCryptoAssets(): void
 
         // Construir pares de negociação para o ativo
         $pairs = $this->buildPairsForAsset($asset);
-        
+
         if (empty($pairs)) {
             Log::info("   -> Nenhum par de negociação relevante encontrado para {$asset}. Pulando.");
             continue;
         }
-        
+
         Log::info("   -> Pares para testar: " . implode(', ', $pairs));
 
         $assetHasTrades = false;
@@ -611,41 +613,41 @@ private function generateSnapshotsFromCryptoAssets(): void
             try {
                 // CORREÇÃO: Passar período de 5 anos em vez de 0, 0
                 $trades = $this->fetchMyTrades($pair, $startTime, $endTime);
-                
+
                 if (!empty($trades)) {
                     Log::info("   🎉 SUCESSO! {$pair}: " . count($trades) . " trades encontrados.");
-                    
+
                     $assetHasTrades = true;
                     $totalTradesFound += count($trades);
-                    
+
                     $baseAsset = $this->getAssetFromSymbol($pair, 'base');
                     $quoteAsset = $this->getAssetFromSymbol($pair, 'quote');
-                    
+
                     // Organizar trades por mês
                     foreach ($trades as $trade) {
                         $date = Carbon::createFromTimestampMs($trade['time']);
                         $monthKey = $date->format('Y-m');
-                        
+
                         // Inicializar array do mês se não existir
                         if (!isset($monthlyAssets[$monthKey])) {
                             $monthlyAssets[$monthKey] = [];
                         }
-                        
+
                         // Adicionar base asset
                         if ($baseAsset && !in_array($baseAsset, $monthlyAssets[$monthKey])) {
                             $monthlyAssets[$monthKey][] = $baseAsset;
                         }
-                        
+
                         // Adicionar quote asset
                         if ($quoteAsset && !in_array($quoteAsset, $monthlyAssets[$monthKey])) {
                             $monthlyAssets[$monthKey][] = $quoteAsset;
                         }
                     }
-                    
+
                     // Encontrou trades para este ativo, não precisa testar outros pares
                     break;
                 }
-                
+
             } catch (Exception $e) {
                 Log::warning("   ⚠️ Erro ao buscar trades de {$pair}: " . $e->getMessage());
                 continue;
@@ -664,7 +666,7 @@ private function generateSnapshotsFromCryptoAssets(): void
     Log::info("   - Total de trades encontrados: {$totalTradesFound}");
     Log::info("======================================================================");
     Log::info("💾 Salvando snapshots mensais no banco de dados...");
-    
+
     if (empty($monthlyAssets)) {
         Log::warning("⚠️ Nenhum mês com transações foi encontrado após a varredura completa.");
         Log::warning("   Isso pode indicar que não há trades nos últimos 5 anos ou há um problema na API.");
@@ -673,14 +675,14 @@ private function generateSnapshotsFromCryptoAssets(): void
 
     // Ordenar meses cronologicamente
     ksort($monthlyAssets);
-    
+
     $snapshotsSaved = 0;
-    
+
     foreach ($monthlyAssets as $monthKey => $assets) {
         [$year, $month] = explode('-', $monthKey);
         $uniqueAssets = array_values(array_unique($assets));
-       
-        
+
+
 
         MonthlyAssetSnapshot::updateOrCreate(
             [
@@ -693,11 +695,11 @@ private function generateSnapshotsFromCryptoAssets(): void
                 'assets' => $uniqueAssets
             ]
         );
-        
+
         $snapshotsSaved++;
         Log::info("   -> Snapshot salvo para {$monthKey}: " . count($uniqueAssets) . " ativos.");
     }
-    
+
     Log::info("======================================================================");
     Log::info("🎉 [Fase 1: Descoberta Inteligente] Concluída com sucesso!");
     Log::info("   - Total de snapshots criados: {$snapshotsSaved}");
@@ -821,7 +823,7 @@ private function generateSnapshotsFromCryptoAssets(): void
 
     if ($snapshots->isEmpty()) {
         return [
-            'success' => false, 
+            'success' => false,
             'message' => 'Nenhum snapshot encontrado para guiar a importação.'
         ];
     }
@@ -843,7 +845,7 @@ private function generateSnapshotsFromCryptoAssets(): void
 
         try {
             $assets = $snapshot->assets ?? [];
-            
+
             if (empty($assets)) {
                 Log::info("   -> Nenhum ativo para processar neste mês. Pulando.");
                 continue;
@@ -876,14 +878,14 @@ private function generateSnapshotsFromCryptoAssets(): void
     Log::info("======================================================================");
     Log::info("📊 Estatísticas:");
     Log::info("   - Meses processados: {$processedSnapshots}");
-    
+
     if ($failedSnapshots > 0) {
         Log::warning("   - Meses com falhas: {$failedSnapshots}");
     }
-    
+
     Log::info("   - Trades importados: {$totalTradesImported}");
     Log::info("   - Conversões importadas: {$totalConversionsImported}");
-    
+
     return [
         'success' => true,
         'trades_imported' => $totalTradesImported,
@@ -903,27 +905,27 @@ private function generateSnapshotsFromCryptoAssets(): void
 
     $imported = 0;
     $failed = 0;
-    
+
     Log::info("   -> Símbolos a processar: " . count($symbols));
-    
+
     foreach ($symbols as $symbol) {
         try {
             // Buscar trades do símbolo
             $trades = $this->fetchMyTrades($symbol, $monthStart->getTimestampMs(), $monthEnd->getTimestampMs());
-            
+
             if (empty($trades)) {
                 Log::debug("   -> {$symbol}: Nenhum trade encontrado neste período.");
                 continue;
             }
-            
+
             Log::info("   -> {$symbol}: " . count($trades) . " trades encontrados. Processando...");
-            
+
             foreach ($trades as $trade) {
                 try {
                     // Filtro para garantir que o trade está dentro do mês
-                    if ($trade['time'] >= $monthStart->getTimestampMs() && 
+                    if ($trade['time'] >= $monthStart->getTimestampMs() &&
                         $trade['time'] <= $monthEnd->getTimestampMs()) {
-                        
+
                         $this->saveSpotTrade($trade);
                         $imported++;
                     }
@@ -932,9 +934,9 @@ private function generateSnapshotsFromCryptoAssets(): void
                     $failed++;
                     $tradeId = $trade['id'] ?? 'N/A';
                     $tradeSymbol = $trade['symbol'] ?? $symbol;
-                    
+
                     Log::warning("   ⚠️ Falha ao salvar trade {$tradeId} ({$tradeSymbol}): " . $e->getMessage());
-                    
+
                     // Log detalhado apenas em modo debug
                     Log::debug("   -> Detalhes do erro:", [
                         'trade_id' => $tradeId,
@@ -946,7 +948,7 @@ private function generateSnapshotsFromCryptoAssets(): void
             }
 
             Log::info("✅ Total de trades importados para {$monthStart->format('Y-m')}: {$imported}");
-            
+
         } catch (Exception $e) {
             // Erro ao buscar trades do símbolo - registrar e continuar com próximo símbolo
             Log::warning("   ⚠️ Falha ao processar símbolo {$symbol}: " . $e->getMessage());
@@ -957,14 +959,14 @@ private function generateSnapshotsFromCryptoAssets(): void
             ]);
         }
     }
-    
+
     // Log resumido
     if ($failed > 0) {
         Log::warning("   ⚠️ Resumo: {$imported} trades importados, {$failed} falharam");
     } else {
         Log::info("   ✅ Total de trades importados: {$imported}");
     }
-    
+
     return $imported;
 }
 
@@ -1012,27 +1014,27 @@ private function generateSnapshotsFromCryptoAssets(): void
     if ($this->validSymbols !== null) {
         return $this->validSymbols;
     }
-    
+
     Log::info("   -> [getValidSymbols] Buscando lista de símbolos válidos da Binance...");
-    
+
     try {
         // Buscar informações de exchange da API pública
         $response = Http::timeout(15)->get('https://api.binance.com/api/v3/exchangeInfo');
-        
+
         if ($response->successful()) {
             $data = $response->json();
             $symbols = [];
-            
+
             // Extrair apenas símbolos que estão com status TRADING
             foreach ($data['symbols'] ?? [] as $symbolInfo) {
                 if (($symbolInfo['status'] ?? '') === 'TRADING') {
                     $symbols[] = $symbolInfo['symbol'];
                 }
             }
-            
+
             $this->validSymbols = $symbols;
             Log::info("   -> [getValidSymbols] Total de símbolos válidos: " . count($symbols));
-            
+
             return $symbols;
         } else {
             Log::error("   -> [getValidSymbols] Falha ao buscar símbolos da API", [
@@ -1044,7 +1046,7 @@ private function generateSnapshotsFromCryptoAssets(): void
             'error' => $e->getMessage()
         ]);
     }
-    
+
     // Se falhou, retornar array vazio
     $this->validSymbols = [];
     return [];
@@ -1063,29 +1065,29 @@ private function generateSnapshotsFromCryptoAssets(): void
         'ETH',    // Par com Ethereum
         'BNB',    // Par com Binance Coin
     ];
-    
+
     $validSymbols = $this->getValidSymbols();
     $foundPairs = [];
-    
+
     foreach ($mandatoryQuotes as $quote) {
         // Não tentar criar par do ativo consigo mesmo
         if ($asset === $quote) {
             continue;
         }
-        
+
         // Tentar par na ordem: ATIVO + QUOTE (ex: BTCUSDT)
         $pair1 = $asset . $quote;
         if (in_array($pair1, $validSymbols)) {
             $foundPairs[] = $pair1;
         }
-        
+
         // Tentar par na ordem inversa: QUOTE + ATIVO (ex: USDTBTC)
         $pair2 = $quote . $asset;
         if (in_array($pair2, $validSymbols)) {
             $foundPairs[] = $pair2;
         }
     }
-    
+
     // Remover duplicatas e retornar
     return array_unique($foundPairs);
 }
@@ -1220,6 +1222,7 @@ private function generateSnapshotsFromCryptoAssets(): void
         $transaction->fill([
             'source_type' => 'App\\Models\\UserApiKey',
             'source_id' => $this->apiKey->id,
+            'import_origin' => 'binance_api',
             'type' => 'trade',
             'from_asset' => $fromAsset,
             'from_amount' => $fromAmount,
@@ -1272,6 +1275,7 @@ private function generateSnapshotsFromCryptoAssets(): void
         $transaction->fill([
             'source_type' => 'App\\Models\\UserApiKey',
             'source_id' => $this->apiKey->id,
+            'import_origin' => 'binance_api',
             'type' => 'convert',
             'from_asset' => $fromAssetSymbol,
             'from_amount' => (float) $conv['fromAmount'],
@@ -1298,6 +1302,7 @@ private function generateSnapshotsFromCryptoAssets(): void
         }
 
         $transaction->save();
+        app(BinanceApiCsvReconciliationService::class)->reconcileTransaction($transaction);
     }
 
     private function getHistoricalPrice(string $asset, Carbon $date): array
@@ -1556,23 +1561,23 @@ private function generateSnapshotsFromCryptoAssets(): void
             'VAI',    // VAI Stablecoin
             'BIDR',   // Binance IDR
         ];
-        
+
         // Tentar encontrar a moeda de cotação no final do símbolo
         foreach ($knownQuotes as $quote) {
             if (str_ends_with($symbol, $quote)) {
                 // Extrair o ativo base removendo a cotação do final
                 $base = substr($symbol, 0, -strlen($quote));
-                
+
                 // Validar que o base não está vazio
                 if (empty($base)) {
                     continue;
                 }
-                
+
                 // Retornar o que foi solicitado
                 return $part === 'base' ? $base : $quote;
             }
         }
-        
+
         // Se não conseguiu identificar, retornar null
         Log::warning("   -> [getAssetFromSymbol] Não foi possível extrair ativos do símbolo: {$symbol}");
         return null;

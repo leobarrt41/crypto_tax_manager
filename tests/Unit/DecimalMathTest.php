@@ -18,4 +18,22 @@ class DecimalMathTest extends TestCase
         $this->assertSame('12.5000000000000000', $math->percent('1', '8'));
         $this->assertSame(-1, $math->compare('0.0000000000000001', '0.0000000000000002'));
     }
+
+    public function test_it_canonicalizes_scientific_notation_without_float_precision_loss(): void
+    {
+        $math = app(DecimalMath::class);
+
+        $this->assertSame('400', $math->canonical('400'));
+        $this->assertSame('400', $math->canonical('400.0'));
+        $this->assertSame('400', $math->canonical('400.0000000000'));
+        $this->assertSame('0.00000001', $math->canonical('1E-8'));
+        $this->assertSame('0.00000001', $math->canonical('1.0E-8'));
+        $this->assertSame('0.00000001', $math->canonical('0.0000000100'));
+        $this->assertSame('0', $math->canonical('-0.000'));
+        $this->assertNull($math->canonical('not-a-number'));
+        $this->assertNotSame(
+            $math->canonical('9007199254740992.0000000001'),
+            $math->canonical('9007199254740992.0000000002'),
+        );
+    }
 }

@@ -4,10 +4,21 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class Transaction extends Model
 {
     use HasFactory;
+
+    protected static function booted(): void
+    {
+        static::deleting(function (Transaction $transaction): void {
+            if ($transaction->canonicalReconciliations()->exists() || $transaction->duplicateReconciliation()->exists()) {
+                throw new \LogicException('Uma transação conciliada não pode ser excluída porque a trilha de auditoria deve ser preservada.');
+            }
+        });
+    }
 
     protected $fillable = [
         'user_id',
@@ -50,6 +61,7 @@ class Transaction extends Model
         'to_cost_evidence_type',
         'to_cost_basis_brl',
         'import_metadata',
+        'import_origin',
         'side',
         'executed_at',
     ];
@@ -120,6 +132,20 @@ class Transaction extends Model
         return $this->hasOne(FifoInventoryGap::class);
     }
 
+    public function canonicalReconciliations(): HasMany
+    {
+        return $this->hasMany(TransactionReconciliation::class, 'canonical_transaction_id');
+    }
+
+    public function duplicateReconciliation(): HasOne
+    {
+        return $this->hasOne(TransactionReconciliation::class, 'matched_transaction_id');
+    }
+
+    public function documentaryEvidences(): HasMany
+    {
+        return $this->hasMany(TransactionImportEvidence::class);
+    }
 
     /**
      * Taxa da operação expressa no ativo enviado por uma unidade do ativo recebido.
@@ -142,20 +168,17 @@ class Transaction extends Model
     }
 
     public function getPriceInBRLAttribute()
-{
-    $price = $this->cryptoAsset->prices()
-        ->whereDate('retrieved_at', '<=', $this->date)
-        ->orderByDesc('retrieved_at')
-        ->first();
+    {
+        $price = $this->cryptoAsset->prices()
+            ->whereDate('retrieved_at', '<=', $this->date)
+            ->orderByDesc('retrieved_at')
+            ->first();
 
-    return $price ? $price->price_in_brl : null;
+        return $price ? $price->price_in_brl : null;
+    }
+
+    public function getTotalInBRLAttribute()
+    {
+        return $this->price_in_brl ? $this->price_in_brl * $this->amount : null;
+    }
 }
-
-public function getTotalInBRLAttribute()
-{
-    return $this->price_in_brl ? $this->price_in_brl * $this->amount : null;
-}
-
-
-}
-

@@ -190,6 +190,16 @@
           </Link>
         </li>
 
+        <li>
+          <Link
+            href="/reports/relatorio-ir/cost-pending-diagnosis"
+            class="nav-item flex items-center rounded-lg p-3 pl-11 text-sm transition-colors"
+            :class="isActive('/reports/relatorio-ir/cost-pending-diagnosis') ? 'bg-indigo-600 text-white' : 'text-gray-700 hover:bg-gray-100'"
+          >
+            Diagnóstico de custos
+          </Link>
+        </li>
+
         <!-- Separador -->
         <li class="border-t border-gray-200 my-4"></li>
 

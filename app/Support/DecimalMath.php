@@ -12,6 +12,38 @@ class DecimalMath
 {
     public const SCALE = 16;
 
+    public function canonical(mixed $value): ?string
+    {
+        $value = trim((string) $value);
+        if (preg_match('/^([+-]?)((?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[eE]([+-]?\d+))?$/', $value, $matches) !== 1) {
+            return null;
+        }
+
+        $negative = $matches[1] === '-';
+        [$integer, $fraction] = array_pad(explode('.', $matches[2], 2), 2, '');
+        $integer = $integer === '' ? '0' : $integer;
+        $exponent = isset($matches[3]) ? (int) $matches[3] : 0;
+        $digits = $integer.$fraction;
+        $decimalPosition = strlen($integer) + $exponent;
+
+        if ($decimalPosition <= 0) {
+            $integer = '0';
+            $fraction = str_repeat('0', -$decimalPosition).$digits;
+        } elseif ($decimalPosition >= strlen($digits)) {
+            $integer = $digits.str_repeat('0', $decimalPosition - strlen($digits));
+            $fraction = '';
+        } else {
+            $integer = substr($digits, 0, $decimalPosition);
+            $fraction = substr($digits, $decimalPosition);
+        }
+
+        $integer = ltrim($integer, '0') ?: '0';
+        $fraction = rtrim($fraction, '0');
+        $normalized = $integer.($fraction !== '' ? '.'.$fraction : '');
+
+        return $negative && $normalized !== '0' ? '-'.$normalized : $normalized;
+    }
+
     public function normalize(mixed $value): string
     {
         $value = trim((string) $value);

@@ -6,6 +6,7 @@ use App\Models\Transaction;
 use App\Models\TaxMonthlySummary;
 use App\Models\FifoOpeningBalance;
 use App\Models\FifoInventoryGap;
+use App\Models\TransactionReconciliation;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -36,6 +37,10 @@ class FifoCalculatorService
 
     // Tipos que representam CONVERSÃO (saída + entrada)
     private const CONVERT_TYPES = ['trade', 'convert', 'swap'];
+
+    public function __construct(private readonly TransactionImportEvidenceService $importEvidence)
+    {
+    }
 
     // ─── API pública ─────────────────────────────────────────────────────────────
 
@@ -142,7 +147,13 @@ class FifoCalculatorService
             $summaryQuery->delete();
 
             // ── 4. Buscar transações cronologicamente ───────────────────────────
+            $scopedTransactionIds = (clone $transactionsQuery)->pluck('id')->all();
             $transactions = $transactionsQuery
+                ->whereNotIn('id', TransactionReconciliation::query()
+                    ->select('matched_transaction_id')
+                    ->where('user_id', $userId)
+                    ->where('status', TransactionReconciliation::STATUS_CONFIRMED))
+                ->with('documentaryEvidences')
                 ->orderBy('date')
                 ->orderBy('id')
                 ->get();
@@ -242,7 +253,7 @@ class FifoCalculatorService
             // ── 8. Resolver somente lacunas deste escopo que não persistirem ───────
             $stats['fifo_gaps_resolved'] = $this->resolveRecoveredGaps(
                 $userId,
-                $transactions->pluck('id')->all(),
+                $scopedTransactionIds,
                 $detectedGapTransactionIds,
             );
 
@@ -611,7 +622,8 @@ class FifoCalculatorService
     /** @return array{cost_brl: ?float, cost_status: string, evidence_type: ?string} */
     private function resolveConvertAcquisitionLeg(Transaction $transaction): array
     {
-        $metadata = is_array($transaction->import_metadata) ? $transaction->import_metadata : [];
+        $metadata = $this->importEvidence->annualCsvMetadata($transaction)
+            ?? (is_array($transaction->import_metadata) ? $transaction->import_metadata : []);
         $brlValues = is_array($metadata['brl_values'] ?? null) ? $metadata['brl_values'] : [];
         $receivedValue = $brlValues['received_value_brl'] ?? null;
 
