@@ -110,18 +110,6 @@ class TransactionImportEvidenceService
 
     private function comparableDecimal(mixed $value): ?string
     {
-        if (! is_numeric($value)) {
-            return null;
-        }
-
-        $value = trim((string) $value);
-        if (str_contains(strtolower($value), 'e')) {
-            // transactions.from_amount/to_amount usam escala 10. A expansão
-            // replica a representação persistida, sem usar o float em cálculo
-            // monetário ou criar precisão que a coluna não possui.
-            $value = number_format((float) $value, 10, '.', '');
-        }
-
-        return $value;
+        return $this->decimal->canonical($value);
     }
 }

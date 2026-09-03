@@ -19,6 +19,7 @@ use App\Services\CryptoPriceService;
 use App\Services\TransactionImportCoverageService;
 use App\Services\TransactionImportEvidenceService;
 use App\Services\BinanceApiCsvReconciliationService;
+use App\Support\DecimalMath;
 use Exception;
 use Carbon\Carbon; // Necessário para a reconstrução de saldos
 use OpenSpout\Reader\XLSX\Reader as XlsxReader;
@@ -1356,34 +1357,7 @@ private function annualCsvCollisionReference(array $transactionData): string
 
 private function canonicalCsvDecimal(mixed $value): ?string
 {
-    $value = trim((string) $value);
-    if (preg_match('/^([+-]?)(\d+)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$/', $value, $matches) !== 1) {
-        return null;
-    }
-
-    $negative = $matches[1] === '-';
-    $integer = $matches[2];
-    $fraction = $matches[3] ?? '';
-    $exponent = isset($matches[4]) ? (int) $matches[4] : 0;
-    $digits = $integer.$fraction;
-    $decimalPosition = strlen($integer) + $exponent;
-
-    if ($decimalPosition <= 0) {
-        $integer = '0';
-        $fraction = str_repeat('0', -$decimalPosition).$digits;
-    } elseif ($decimalPosition >= strlen($digits)) {
-        $integer = $digits.str_repeat('0', $decimalPosition - strlen($digits));
-        $fraction = '';
-    } else {
-        $integer = substr($digits, 0, $decimalPosition);
-        $fraction = substr($digits, $decimalPosition);
-    }
-
-    $integer = ltrim($integer, '0') ?: '0';
-    $fraction = rtrim($fraction, '0');
-    $normalized = $integer.($fraction !== '' ? '.'.$fraction : '');
-
-    return $negative && $normalized !== '0' ? '-'.$normalized : $normalized;
+    return app(DecimalMath::class)->canonical($value);
 }
 
 private function extractRowsFromImportedFile(string $filePath, string $extension): array

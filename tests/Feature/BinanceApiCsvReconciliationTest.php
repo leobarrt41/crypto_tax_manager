@@ -315,6 +315,61 @@ class BinanceApiCsvReconciliationTest extends TestCase
         $this->assertDatabaseCount('transaction_import_evidences', 0);
     }
 
+    public function test_scientific_decimal_variants_attach_evidence_without_float_conversion(): void
+    {
+        $api = $this->transaction('convert', 'USDT', '0.0000000100', 'SHIB', '1000', '2025-01-02 08:48:38', null, [
+            'reference' => 'scientific-api-reference',
+            'import_origin' => 'binance_api',
+        ]);
+        $service = app(\App\Services\TransactionImportEvidenceService::class);
+
+        foreach (['1E-8', '1.0E-8', '0.0000000100'] as $amount) {
+            $evidence = $service->attachAnnualCsvEvidence($api, [
+                'type' => 'convert',
+                'from_asset' => 'USDT',
+                'from_amount' => $amount,
+                'to_asset' => 'SHIB',
+                'to_amount' => '1000',
+                'date' => $api->date,
+                'reference' => 'scientific-api-reference',
+                'import_metadata' => ['format' => 'binance_annual_csv'],
+            ]);
+
+            $this->assertNotNull($evidence);
+        }
+
+        $this->assertDatabaseCount('transaction_import_evidences', 1);
+    }
+
+    public function test_large_decimals_that_differ_beyond_float_precision_do_not_attach_evidence(): void
+    {
+        $api = $this->transaction(
+            'convert',
+            'USDT',
+            '9007199254740992.0000000001',
+            'BTC',
+            '1',
+            '2025-01-02 08:48:38',
+            null,
+            ['reference' => 'large-decimal-reference', 'import_origin' => 'binance_api'],
+        );
+
+        $evidence = app(\App\Services\TransactionImportEvidenceService::class)
+            ->attachAnnualCsvEvidence($api, [
+                'type' => 'convert',
+                'from_asset' => 'USDT',
+                'from_amount' => '9007199254740992.0000000002',
+                'to_asset' => 'BTC',
+                'to_amount' => '1',
+                'date' => $api->date,
+                'reference' => 'large-decimal-reference',
+                'import_metadata' => ['format' => 'binance_annual_csv'],
+            ]);
+
+        $this->assertNull($evidence);
+        $this->assertDatabaseCount('transaction_import_evidences', 0);
+    }
+
     public function test_same_stable_reference_with_divergent_economic_event_does_not_attach_evidence(): void
     {
         $api = $this->apiConvert('stable-divergent');

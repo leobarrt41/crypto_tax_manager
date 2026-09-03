@@ -20,7 +20,7 @@ return new class extends Migration
         }
 
         Schema::table('transactions', function (Blueprint $table): void {
-            $table->string('import_origin', 40)->default('legacy_unknown')->after('import_metadata');
+            $table->string('import_origin', 40)->default('legacy_unknown');
             $table->index(['user_id', 'import_origin']);
         });
 
@@ -39,10 +39,10 @@ return new class extends Migration
             });
 
         Schema::table('transaction_reconciliations', function (Blueprint $table): void {
-            $table->timestamp('pending_review_at')->nullable()->after('reconciled_at');
-            $table->timestamp('confirmed_at')->nullable()->after('pending_review_at');
-            $table->timestamp('rejected_at')->nullable()->after('confirmed_at');
-            $table->timestamp('revoked_at')->nullable()->after('rejected_at');
+            $table->timestamp('pending_review_at')->nullable();
+            $table->timestamp('confirmed_at')->nullable();
+            $table->timestamp('rejected_at')->nullable();
+            $table->timestamp('revoked_at')->nullable();
             $table->unique('canonical_transaction_id', 'transaction_reconciliations_canonical_unique');
         });
 
